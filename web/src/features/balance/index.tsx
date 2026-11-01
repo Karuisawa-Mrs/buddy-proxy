@@ -1,24 +1,21 @@
 import { RefreshCw } from 'lucide-react'
 import { useMemo } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
 import { PageShell } from '@/components/layout/page-shell'
 import { ErrorState } from '@/components/async-state'
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Separator } from '@/components/ui/separator'
 import {
-  balanceKeys,
-  useBalance,
+  useBalanceOverview,
   useBalances,
   useRefreshBalance,
 } from '@/features/balance/api'
-import { QuotaDetail } from '@/features/balance/quota'
-import { describeError } from '@/lib/errors'
+import {
+  AllUpstreamsFailedNotice,
+  EmptyQuotaCard,
+  QuotaCard,
+  QuotaErrorCard,
+  QuotaSkeletonCard,
+  QuotaSkeletonList,
+} from '@/features/balance/cards'
 import type { UpstreamQuota } from '@/gen/buddy/admin/v1/admin_pb'
 
 /**
@@ -87,41 +84,30 @@ export function mergeQuotas(quotas: UpstreamQuota[]): UpstreamQuota[] {
   return merged
 }
 
-/** 一条上游的额度查询。 */
+/** 一条平台的额度查询。 */
 type BalanceQuery = ReturnType<typeof useBalances>[number]
 
 export function BalancePage() {
-  // 全量这一趟只拿来认上游：谁家有哪些账号由它定。
-  const list = useBalance('')
-  const refresh = useRefreshBalance('')
-  const queryClient = useQueryClient()
+  // 首屏只读快照（peek）：已有的数先画出来，也由它认出有哪些平台。
+  const overview = useBalanceOverview()
+  const refresh = useRefreshBalance()
 
-  // 上游清单：全量数据里出现过的上游，按头一次出现的次序。
+  // 平台清单：后端给的名单，加上快照里出现过的平台，按头一次出现的次序。
   const upstreamIds = useMemo(() => {
     const ids: string[] = []
-    for (const quota of list.data?.quotas ?? []) {
+    for (const id of overview.data?.upstreamIds ?? []) {
+      if (id && !ids.includes(id)) ids.push(id)
+    }
+    for (const quota of overview.data?.quotas ?? []) {
       if (quota.upstreamId && !ids.includes(quota.upstreamId)) {
         ids.push(quota.upstreamId)
       }
     }
     return ids
-  }, [list.data])
+  }, [overview.data])
 
-  // 每家上游各问一趟：谁先回来谁先渲染，慢的不拖累快的。
+  // 每家平台各问一趟现数：谁先回来谁先换掉快照里的数，慢的不拖累快的。
   const queries = useBalances(upstreamIds)
-
-  const onRefresh = () => {
-    refresh.mutate(undefined, {
-      onSuccess: () => {
-        // 全量刷完，各上游那条也重新问一遍，卡片里的数换成刚问回来的。
-        for (const upstreamId of upstreamIds) {
-          queryClient.invalidateQueries({
-            queryKey: balanceKeys.all(upstreamId),
-          })
-        }
-      },
-    })
-  }
 
   const cardCount = queries.reduce(
     (sum, query) =>
@@ -152,7 +138,7 @@ export function BalancePage() {
           variant='outline'
           size='sm'
           disabled={refresh.isPending}
-          onClick={onRefresh}
+          onClick={() => refresh.mutate()}
         >
           <RefreshCw
             className={refresh.isPending ? 'size-4 animate-spin' : 'size-4'}
@@ -161,10 +147,10 @@ export function BalancePage() {
         </Button>
       }
     >
-      {list.isPending ? (
+      {overview.isPending ? (
         <QuotaSkeletonList />
-      ) : list.isError ? (
-        <ErrorState error={list.error} onRetry={() => list.refetch()} />
+      ) : overview.isError ? (
+        <ErrorState error={overview.error} onRetry={() => overview.refetch()} />
       ) : upstreamIds.length === 0 ? (
         <EmptyQuotaCard />
       ) : (
@@ -180,7 +166,9 @@ export function BalancePage() {
                 key={upstreamId}
                 upstreamId={upstreamId}
                 query={query}
-                refreshing={refresh.isPending || query.isFetching}
+                snapshot={(overview.data?.quotas ?? []).filter(
+                  (quota) => quota.upstreamId === upstreamId
+                )}
               />
             )
           })}
@@ -194,185 +182,47 @@ export function BalancePage() {
 }
 
 /**
- * 一家上游的额度卡。
+ * 一家平台的额度卡，一个账号一张。
  *
- * 这一家还没问回来：先摆骨架。问失败了：只这一张卡报错，别的卡照常。
+ * 这一家的现数还没回来：先画快照里的数（转圈表示在问），快照里也没有才摆骨架。
+ * 问失败了：只这一家报错，别的卡照常。转圈只跟这一家自己的查询走。
  */
 function UpstreamQuotaCards({
   upstreamId,
   query,
-  refreshing,
+  snapshot,
 }: {
   upstreamId: string
   query: BalanceQuery
-  refreshing: boolean
+  snapshot: UpstreamQuota[]
 }) {
-  if (query.isPending) {
-    return <QuotaSkeletonCard title={upstreamId} />
+  const retry = () => {
+    void query.refetch()
   }
   if (query.isError) {
     return (
       <QuotaErrorCard
         upstreamId={upstreamId}
         error={query.error as Error}
-        onRetry={() => {
-          void query.refetch()
-        }}
+        onRetry={retry}
       />
     )
   }
-  const quotas = mergeQuotas(query.data?.quotas ?? [])
+  const source = query.isSuccess ? (query.data?.quotas ?? []) : snapshot
+  if (query.isPending && source.length === 0) {
+    return <QuotaSkeletonCard title={upstreamId} />
+  }
+  const quotas = mergeQuotas(source)
   return (
     <>
       {quotas.map((quota) => (
         <QuotaCard
           key={`${quota.upstreamId}|${quota.accountId}`}
           quota={quota}
-          refreshing={refreshing}
+          refreshing={query.isFetching}
+          onRetry={quota.error ? retry : undefined}
         />
       ))}
     </>
-  )
-}
-
-/**
- * 所有上游都没问出来：一行提示加一个统一重试。
- *
- * 逐卡点重试在「全军覆没」时最烦人 —— 每张卡底下都有一个重试按钮，
- * 用户得挨个点。这里一次全部重问。
- */
-function AllUpstreamsFailedNotice({ onRetry }: { onRetry: () => void }) {
-  return (
-    <div className='mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-3'>
-      <p className='text-sm text-destructive'>所有上游都没问出来</p>
-      <Button variant='outline' size='sm' onClick={onRetry}>
-        全部重试
-      </Button>
-    </div>
-  )
-}
-
-/**
- * 一个账号的额度卡。
- *
- * 标题按账号分：主行写账号，账号没报就写上游；副行小字写上游。
- */
-function QuotaCard({
-  quota,
-  refreshing,
-}: {
-  quota: UpstreamQuota
-  refreshing?: boolean
-}) {
-  const title = quota.accountId || quota.upstreamId || '未知 Provider'
-  const subtitle = quota.upstreamId === title ? '' : quota.upstreamId
-  return (
-    <div>
-      <Card className='mb-4'>
-        <CardHeader>
-          <div className='flex items-center gap-2'>
-            <CardTitle className='text-base'>{title}</CardTitle>
-            {refreshing ? (
-              <RefreshCw
-                className='size-3 animate-spin text-muted-foreground'
-                aria-label='刷新中'
-              />
-            ) : null}
-          </div>
-          {subtitle ? (
-            <p className='text-xs text-muted-foreground'>{subtitle}</p>
-          ) : null}
-        </CardHeader>
-        <CardContent className='px-0'>
-          <QuotaDetail quota={quota} />
-        </CardContent>
-      </Card>
-      <Separator className='mb-4' />
-    </div>
-  )
-}
-
-/** 一家上游的额度没问出来：只这张卡自己报错。 */
-function QuotaErrorCard({
-  upstreamId,
-  error,
-  onRetry,
-}: {
-  upstreamId: string
-  error: Error
-  onRetry: () => void
-}) {
-  return (
-    <div>
-      <Card className='mb-4'>
-        <CardHeader>
-          <CardTitle className='text-base'>{upstreamId}</CardTitle>
-          <p className='text-xs text-muted-foreground'>
-            这一家的额度没问出来
-          </p>
-        </CardHeader>
-        <CardContent className='px-0'>
-          <div className='grid gap-3 px-6 pb-4'>
-            <p className='text-sm text-destructive'>{describeError(error)}</p>
-            <div>
-              <Button variant='outline' size='sm' onClick={onRetry}>
-                重试
-              </Button>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-      <Separator className='mb-4' />
-    </div>
-  )
-}
-
-/**
- * 额度卡片的骨架：数还没回来，先把位置占住。
- *
- * 首屏清单还没到的时候不知道有几家上游，就先摆几张空卡。
- */
-function QuotaSkeletonList() {
-  return (
-    <div>
-      <p className='mb-4 text-sm text-muted-foreground'>正在读取额度…</p>
-      {[0, 1, 2].map((index) => (
-        <QuotaSkeletonCard key={index} />
-      ))}
-    </div>
-  )
-}
-
-function QuotaSkeletonCard({ title }: { title?: string }) {
-  return (
-    <div>
-      <Card className='mb-4'>
-        <CardHeader>
-          <CardTitle className='text-base'>
-            {title ?? (
-              <span className='block h-4 w-24 animate-pulse rounded bg-muted' />
-            )}
-          </CardTitle>
-          <div className='mt-1 h-3 w-16 animate-pulse rounded bg-muted' />
-        </CardHeader>
-        <CardContent className='px-0'>
-          <div className='grid gap-3 px-6 pb-4'>
-            <div className='h-4 w-32 animate-pulse rounded bg-muted' />
-            <div className='h-3 w-48 animate-pulse rounded bg-muted' />
-          </div>
-        </CardContent>
-      </Card>
-      <Separator className='mb-4' />
-    </div>
-  )
-}
-
-function EmptyQuotaCard() {
-  return (
-    <Card>
-      <CardContent className='py-12 text-center text-sm text-muted-foreground'>
-        Provider 没有报额度。
-      </CardContent>
-    </Card>
   )
 }

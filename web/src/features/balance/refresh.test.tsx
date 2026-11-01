@@ -67,7 +67,8 @@ describe('刷新额度', () => {
     await user.click(screen.getByRole('button', { name: '刷新额度' }))
 
     await waitFor(() => {
-      expect(calls).toEqual([false, true])
+      // 首屏一趟（不强制）、刷新一趟（force），刷完首屏那条重新读一次（不强制）。
+      expect(calls).toEqual([false, true, false])
     })
   })
 

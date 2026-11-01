@@ -46,9 +46,62 @@ run = "node --experimental-strip-types check-file-size.ts"
 
 [tasks.test]
 description = "Run the offline tests (the mock upstream, no tokens spent)"
+# 每个 node 测试任务都写成 `node --import ./test/net-guard.ts ...`：测试进程自己
+# 向 127.0.0.1 以外发请求也会被拦，进程以非零退出。不放进 [env] 的 NODE_OPTIONS：
+# 那样 serve / web:dev 也会被拦。网关子进程由 test/harness.ts 另外带上。
 run = "bash test/smoke.sh"
-depends = ["test:selection", "test:policy", "test:upstream:status", "test:minimax:fallback", "test:minimax:credits", "test:minimax:credits:view", "test:policy:e2e", "test:catalog-parity", "test:cleanup", "test:cleanup:admin", "test:quota", "test:dead-session", "test:periodic", "test:periodic:off", "test:workbuddy:benefits", "test:workbuddy:catalog", "test:refresh-flow", "test:zcode:headers", "test:zcode:session", "test:session-map", "test:balance-account", "test:timer-refresh", "test:account-weight", "test:token-plan", "test:model-visibility", "test:cooldown", "test:route", "test:health:cooldown", "test:aggregate:error", "test:aggregate:usage", "test:admin:contract", "test:admin:login", "test:login:record", "test:catalog:persist", "test:upstream:cooldown", "test:admin:regression", "test:deliver:frames", "test:peek:stream", "test:empty-answer", "test:dialect:stream", "test:admin:policy", "test:sensenova:intern", "test:intern-ai:quota", "test:qiniu", "test:qiniu:keys", "test:xinghuo", "test:rate:wait", "test:helper", "test:config"]
+depends = ["test:selection", "test:policy", "test:upstream:status", "test:minimax:fallback", "test:minimax:credits", "test:minimax:credits:view", "test:policy:e2e", "test:catalog-parity", "test:cleanup", "test:cleanup:admin", "test:quota", "test:dead-session", "test:periodic", "test:periodic:off", "test:workbuddy:benefits", "test:workbuddy:catalog", "test:refresh-flow", "test:zcode:headers", "test:zcode:session", "test:session-map", "test:balance-account", "test:timer-refresh", "test:account-weight", "test:token-plan", "test:model-visibility", "test:cooldown", "test:route", "test:health:cooldown", "test:aggregate:error", "test:aggregate:usage", "test:admin:contract", "test:admin:login", "test:login:record", "test:catalog:persist", "test:upstream:cooldown", "test:admin:regression", "test:deliver:frames", "test:peek:stream", "test:empty-answer", "test:dialect:stream", "test:admin:policy", "test:sensenova:intern", "test:intern-ai:quota", "test:qiniu", "test:qiniu:keys", "test:xinghuo", "test:rate:wait", "test:helper", "test:config", "test:admin", "test:admin:state", "test:agent", "test:effort", "test:intern-ai", "test:minimax:checkin", "test:qoder:benefits", "test:session", "test:snapshot", "test:tokenrhythm", "test:tokenrhythm:fallback", "test:usage", "test:zcode", "test:sensenova", "test:aggregate", "test:net-guard", "test:fixture-scrub", "test:stream:lifecycle", "test:dialect:tools", "test:front-door", "test:account:lifecycle", "test:store:migrate", "test:balance:panel", "test:ra:unit", "test:ra:route", "test:login:orphan", "test:session:race", "test:store:migrate:backup", "test:quota:status"]
+# 不在上面的：test:policy:browser 要一个真浏览器（REQUIRE_BROWSER=1 时没有就算失败），
+# 离线的那一半已经由 test:policy:e2e 跑了。
 
+
+[tasks."test:stream:lifecycle"]
+description = "Check the stream lifecycle: slow client, hang-up, first-frame error, mid-stream break, 400 stop"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/stream-lifecycle-check.ts"
+
+[tasks."test:dialect:tools"]
+description = "Check tool calls, block order and the thinking budget across the two dialects"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/dialect-tools-check.ts"
+
+[tasks."test:front-door"]
+description = "Check the front door: API keys, the /health details, key rotation without a restart"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/front-door-check.ts"
+
+[tasks."test:account:lifecycle"]
+description = "Check cancel/delete/id reuse/refresh lock/sensenova 401 across an account's life"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/account-lifecycle-check.ts"
+
+[tasks."test:store:migrate"]
+description = "Check the store migration: backup first, one transaction, resume or roll back"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/store-migrate-check.ts"
+
+[tasks."test:balance:panel"]
+description = "Check the balance panel API: peek, per-account errors, per-part provider keys"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/balance-panel-check.ts"
+
+[tasks."test:ra:unit"]
+description = "Check the shared wait budget, settle after a client left, request faults, the JSON limit, the key table and a broken gzip answer"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/ra-unit-check.ts"
+
+[tasks."test:ra:route"]
+description = "Check a client that stops reading, 413/model-400 fallback across targets, and the loopback-only notice"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/ra-route-check.ts"
+
+[tasks."test:login:orphan"]
+description = "Check that a password login whose account is deleted midway leaves no credentials"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/login-orphan-check.ts"
+
+[tasks."test:session:race"]
+description = "Check refresh races: delete mid-refresh, lock takeover, refused while waiting, intern-ai 401"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/session-race-check.ts"
+
+[tasks."test:store:migrate:backup"]
+description = "Check that a failing migration rolls back fully and reuses one backup"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/store-migrate-backup-check.ts"
+
+[tasks."test:quota:status"]
+description = "Check the quota panel: a silently empty account still shows an error card, and unregistering forgets it"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/quota-status-check.ts"
 
 [tasks."helper:sync"]
 description = "Sync the gateway's model list into the local client configs (opencode / pi)"
@@ -64,127 +117,130 @@ run = "python3 -m unittest discover -s helper -p 'test_*.py'"
 
 [tasks."test:selection"]
 description = "Check the shared selection package (the order, the fallback, the stop)"
-run = "node --experimental-strip-types test/selection-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/selection-check.ts"
 
 [tasks."test:policy"]
 description = "Check the upstream policies (the accounts, the order, the failure kinds)"
-run = "node --experimental-strip-types test/policy-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/policy-check.ts"
 
 [tasks."test:upstream:status"]
 description = "Check that the transports keep the upstream's own status (a fake upstream)"
-run = "node --experimental-strip-types test/upstream-status-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/upstream-status-check.ts"
 
 [tasks."test:upstream:cooldown"]
 description = "Check that the panel sees the cooldown (the state, the deadline, the reason)"
-run = "node --experimental-strip-types test/upstream-cooldown-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/upstream-cooldown-check.ts"
 
 [tasks."test:policy:e2e"]
 description = "Check that the policy takes effect at once (a fake upstream, no tokens spent)"
-run = "node --experimental-strip-types test/provider-policy-e2e-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/provider-policy-e2e-check.ts"
 
 [tasks."test:minimax:fallback"]
 description = "Check that a rejected MiniMax account is left for the next one"
-run = "node --experimental-strip-types test/minimax-fallback-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/minimax-fallback-check.ts"
 
 [tasks."test:minimax:credits"]
 description = "Check the MiniMax availability: the plan windows, or the points plus the auto-spend switch"
-run = "node --experimental-strip-types test/minimax-credits-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/minimax-credits-check.ts"
 
 [tasks."test:policy:browser"]
 description = "Check the policy in the real panel (needs the panel: cd web && pnpm build)"
-run = "REQUIRE_BROWSER=1 node --experimental-strip-types test/provider-policy-e2e-check.ts"
+run = "REQUIRE_BROWSER=1 node --import ./test/net-guard.ts --experimental-strip-types test/provider-policy-e2e-check.ts"
 
 [tasks."test:cleanup"]
 description = "Check the cleanup: the simulated client name, the key interface, the catalog cache"
-run = "node --experimental-strip-types test/cleanup-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/cleanup-check.ts"
 
 [tasks."test:cleanup:admin"]
 description = "Check the cleanup on the panel side: the upstream switch, the credential ids, the retention setting"
-run = "node --experimental-strip-types test/cleanup-admin-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/cleanup-admin-check.ts"
 
 [tasks."test:quota"]
 description = "Check the quota readout: the MiniMax plan by session, the SenseNova pools, the ZCode quota"
-run = "node --experimental-strip-types test/quota-readout-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/quota-readout-check.ts"
 
 [tasks."test:dead-session"]
 description = "Check that a refused session is not asked about again"
-run = "node --experimental-strip-types test/dead-session-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/dead-session-check.ts"
 
 [tasks."test:periodic:off"]
 description = "Check that the timer can be turned off (no refresh, no check-in)"
-run = "node --experimental-strip-types test/periodic-off-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/periodic-off-check.ts"
 
 [tasks."test:periodic"]
 description = "Check the periodic work: the sessions are refreshed and the balances scanned on a timer"
-run = "node --experimental-strip-types test/periodic-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/periodic-check.ts"
 
 [tasks."test:balance-account"]
 description = "Check the balance account: the scan, the order, the pinned one"
-run = "node --experimental-strip-types test/balance-account-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/balance-account-check.ts"
 
 [tasks."test:timer-refresh"]
 description = "Check that only the timer refreshes a token, and only when it is due"
-run = "node --experimental-strip-types test/timer-refresh-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/timer-refresh-check.ts"
 
 [tasks."test:account-weight"]
 description = "Check the account weight and that deleting an account leaves nothing behind"
-run = "node --experimental-strip-types test/account-weight-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/account-weight-check.ts"
 
 [tasks."test:token-plan"]
 description = "Check that the video window is ignored (the gateway serves text only)"
-run = "node --experimental-strip-types test/token-plan-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/token-plan-check.ts"
 
 [tasks."test:model-visibility"]
 description = "Check that a spent account hides no model (503 with Retry-After, not 400)"
-run = "node --experimental-strip-types test/model-visibility-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/model-visibility-check.ts"
 
 [tasks."test:deliver:frames"]
 description = "Check the frames the client reads (a message_start without a message gets one)"
-run = "node --experimental-strip-types test/deliver-frames-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/deliver-frames-check.ts"
 
 [tasks."test:peek:stream"]
 description = "Check the first frame of an upstream answer (a locked stream is read once, and the error frame is parsed)"
-run = "node --experimental-strip-types test/peek-stream-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/peek-stream-check.ts"
 
 [tasks."test:empty-answer"]
 description = "Upstream answered 200 with no content: warn once"
-run = "node --experimental-strip-types test/empty-answer-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/empty-answer-check.ts"
 
 [tasks."test:dialect:stream"]
 description = "Check that a `data: null` frame from an upstream does not break the answer (it used to throw while reading .usage)"
-run = "node --experimental-strip-types test/dialect-stream-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/dialect-stream-check.ts"
 
 [tasks."test:cooldown"]
 description = "Check the cooldown: a failed account is set aside, and how long (a fake upstream, no tokens spent)"
-run = "node --experimental-strip-types test/cooldown-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/cooldown-check.ts"
 
 [tasks."test:rate:wait"]
 description = "Check that a rate limit the gateway can wait out is waited out (a fake upstream, no tokens spent)"
-run = "node --experimental-strip-types test/rate-wait-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/rate-wait-check.ts"
 
 [tasks."test:health:cooldown"]
 description = "Check that /health says which account is cooling down, and until when"
-run = "node --experimental-strip-types test/health-cooldown-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/health-cooldown-check.ts"
 
 [tasks."test:aggregate:error"]
 description = "Check which failure the root route shows the client (a fake upstream, no tokens spent)"
-run = "node --experimental-strip-types test/aggregate-error-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/aggregate-error-check.ts"
 
 [tasks."test:aggregate:usage"]
 description = "Check that a request that never reached the upstream still leaves a usage row (a fake upstream, no tokens spent)"
-run = "node --experimental-strip-types test/aggregate-usage-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/aggregate-usage-check.ts"
 
 [tasks."test:minimax:credits:view"]
 description = "Check that the panel's credit list leaves the expired lots out (the same rule the routing uses)"
-run = "node --experimental-strip-types test/minimax-credits-view-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/minimax-credits-view-check.ts"
 
 [tasks."test:admin:contract"]
 description = "Check the panel's API against the contract, field by field"
-run = "node --experimental-strip-types test/admin-contract-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/admin-contract-check.ts"
+# 静态托管那几项要 web/dist：没构建过就跳过，新克隆的仓库里永远不跑。
+# 先构建一遍（本机约 12 秒）。
+depends = ["web:build"]
 
 [tasks."test:admin:regression"]
 description = "Check that the proxy's own endpoints still behave"
-run = "node --experimental-strip-types test/admin-regression-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/admin-regression-check.ts"
 
 [tasks."test:aggregate"]
 description = "Run the tests for the published models"
@@ -192,128 +248,140 @@ run = "bash test/aggregate.sh"
 
 [tasks."test:admin"]
 description = "Run the tests for the panel's API (Connect)"
-run = "node --experimental-strip-types test/admin-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/admin-check.ts"
 depends = ["test:admin:policy"]
 
 [tasks."test:admin:policy"]
 description = "Check the upstream provider policy (read, write, validation, the check-in accounts)"
-run = "node --experimental-strip-types test/provider-policy-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/provider-policy-check.ts"
+
+[tasks."test:fixture-scrub"]
+description = "Check that a recording is scrubbed before it is written, and that the committed fixtures are"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/fixture-scrub-check.ts"
+
+[tasks."test:net-guard"]
+description = "Check the guard that keeps a test gateway off the internet (test/net-guard.ts)"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/net-guard-check.ts"
+
+[tasks."test:sensenova"]
+description = "Check the SenseNova logic that needs no network (the pools, the windows, the cookies, the masks)"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/sensenova-check.ts"
 
 [tasks."test:sensenova:intern"]
 description = "Check SenseNova and 书生·端砚 offline: their catalogues, keys and quotas, against a fake upstream"
-run = "node --experimental-strip-types test/sensenova-intern-ai-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/sensenova-intern-ai-check.ts"
 
 [tasks."test:admin:login"]
 description = "Run the tests for the panel's login flows (a fake upstream, no real login)"
-run = "node --experimental-strip-types test/admin-login-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/admin-login-check.ts"
 
 [tasks."test:login:record"]
 description = "Check that a password login closes its login record (the panel must not stay on 'logging in')"
-run = "node --experimental-strip-types test/login-record-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/login-record-check.ts"
 
 [tasks."test:effort"]
 description = "Check that the thinking level survives the dialect conversion"
-run = "node --experimental-strip-types test/effort-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/effort-check.ts"
 
 [tasks."test:catalog-parity"]
 description = "Check that the panel's published models and the root route publish the same numbers"
-run = "node --experimental-strip-types test/catalog-parity-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/catalog-parity-check.ts"
 
 [tasks."test:config"]
 description = "Check that the settings the panel can change take effect at once (no restart)"
-run = "node --experimental-strip-types test/config-restart-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/config-restart-check.ts"
 
 [tasks."test:admin:state"]
 description = "Check the upstream states, the credential enum and the unpublished reasons"
-run = "node --experimental-strip-types test/admin-state-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/admin-state-check.ts"
 
 [tasks."test:intern-ai"]
 description = "Run the tests for the intern-ai module (no network)"
-run = "node --experimental-strip-types test/intern-ai-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/intern-ai-check.ts"
 
 [tasks."test:intern-ai:quota"]
 description = "Check what the panel sees for intern-ai (the windows, the balance, the recovery)"
-run = "node --experimental-strip-types test/intern-ai-quota-view-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/intern-ai-quota-view-check.ts"
 
 [tasks."test:qiniu"]
 description = "Check 七牛云 offline: the resource packs, the quota view, the registration"
-run = "node --experimental-strip-types test/qiniu-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/qiniu-check.ts"
 
 [tasks."test:qiniu:keys"]
 description = "Check 七牛云's two-part credential: the inference key and the portal cookie"
-run = "node --experimental-strip-types test/qiniu-keys-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/qiniu-keys-check.ts"
 
 [tasks."test:xinghuo"]
 description = "Check 讯飞星火 offline: the registration, the catalogue, the API key and the login refusal"
-run = "node --experimental-strip-types test/xinghuo-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/xinghuo-check.ts"
 
 [tasks."test:route"]
 description = "Check the root route end to end (a fake upstream, no tokens spent)"
-run = "node --experimental-strip-types test/route-e2e-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/route-e2e-check.ts"
 
 [tasks."test:qoder:benefits"]
 description = "Check which Qoder campaigns are worth claiming"
-run = "node --experimental-strip-types test/qoder-benefits-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/qoder-benefits-check.ts"
 
 [tasks."test:workbuddy:catalog"]
 description = "Check the WorkBuddy catalogue in the database: it survives a restart, and a stale one still counts"
-run = "node --experimental-strip-types test/workbuddy-catalog-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/workbuddy-catalog-check.ts"
 
 [tasks."test:catalog:persist"]
 description = "Check the model catalogue that lives in the database: it survives a restart, and a stale one still counts"
-run = "node --experimental-strip-types test/catalog-persist-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/catalog-persist-check.ts"
 
 [tasks."test:refresh-flow"]
 description = "Check the shared refresh flow: not due, refused, failed, no session"
-run = "node --experimental-strip-types test/refresh-flow-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/refresh-flow-check.ts"
 
 [tasks."test:workbuddy:benefits"]
 description = "Check the Buddy's trip: the gift is picked up, the Buddy is not sent away with it"
-run = "node --experimental-strip-types test/workbuddy-benefits-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/workbuddy-benefits-check.ts"
 
 [tasks."test:session"]
 description = "Check that a request's session and parent session are recognised"
-run = "node --experimental-strip-types test/session-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/session-check.ts"
 
 [tasks."test:usage"]
 description = "Run the tests for the request-level usage log (no network)"
-run = "node --experimental-strip-types test/usage-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/usage-check.ts"
 
 [tasks."test:zcode"]
 description = "Run the tests for the ZCode login window (no network)"
-run = "node --experimental-strip-types test/zcode-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/zcode-check.ts"
 
 [tasks."test:zcode:headers"]
 description = "Check the ZCode request headers against the official client's (no network)"
-run = "node --experimental-strip-types test/zcode-headers-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/zcode-headers-check.ts"
 
 [tasks."test:zcode:session"]
 description = "Check the ZCode session: an unknown expiry is not an expired session (no network)"
-run = "node --experimental-strip-types test/zcode-session-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/zcode-session-check.ts"
 
 [tasks."test:session-map"]
 description = "Check the client's session id mapping to the upstream's (no network)"
-run = "node --experimental-strip-types test/session-map-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/session-map-check.ts"
 
 [tasks."test:snapshot"]
 description = "Run the tests for reading the health snapshot by provider id (no network)"
-run = "node --experimental-strip-types test/snapshot-entry-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/snapshot-entry-check.ts"
 
 [tasks."test:tokenrhythm"]
 description = "Run the tests for the TokenRhythm tenant choice (no network)"
-run = "node --experimental-strip-types test/tokenrhythm-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/tokenrhythm-check.ts"
 
 [tasks."test:tokenrhythm:fallback"]
 description = "Run the tests for switching tenants when the balance is gone (no network)"
-run = "node --experimental-strip-types test/tokenrhythm-fallback-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/tokenrhythm-fallback-check.ts"
 
 [tasks."test:agent"]
 description = "Run the tests for telling the agents apart by their headers"
-run = "node --experimental-strip-types test/agent-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/agent-check.ts"
 
 [tasks."test:minimax:checkin"]
 description = "Run the tests for the MiniMax Code daily sign-in"
-run = "node --experimental-strip-types test/minimax-checkin-check.ts"
+run = "node --import ./test/net-guard.ts --experimental-strip-types test/minimax-checkin-check.ts"
 
 [tasks.proto]
 description = "Regenerate the TypeScript client from the contract (router and panel)"
@@ -369,7 +437,7 @@ run = "cd web && pnpm test"
 
 [tasks.build]
 description = "Build the panel and the image"
-depends = ["web.build", "image.build"]
+depends = ["web:build", "image:build"]
 
 [tasks."image:build"]
 description = "Build the image that carries the router and the panel"

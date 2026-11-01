@@ -11,32 +11,33 @@ import { useAdminClient } from '@/features/auth/client-provider'
 import { describeError } from '@/lib/errors'
 
 export const balanceKeys = {
+  /** 额度的所有查询：刷新时按这个前缀失效，平台列表变了也不会漏掉谁。 */
+  root: ['balance'] as const,
   all: (upstreamId: string) => ['balance', upstreamId] as const,
 }
 
 /**
- * 额度。upstreamId 为空表示所有上游。
+ * 首屏：只读快照（peek），不等后端的全量刷新。
  *
- * 回来的每一条是一个账号的额度：余额、积分、套餐额度，三样各是各的，
- * 前端不把它们加起来。
+ * 回来的是快照里已有的数，加上名下有账号的平台列表 —— 页面据此先把已有的数
+ * 画出来，再按平台各问一趟现数。最慢的平台不拖整页。
  */
-export function useBalance(upstreamId: string) {
+export function useBalanceOverview() {
   const client = useAdminClient()
   return useQuery({
-    queryKey: balanceKeys.all(upstreamId),
+    queryKey: balanceKeys.all(''),
     queryFn: () =>
-      client.getBalance(create(GetBalanceRequestSchema, { upstreamId })),
+      client.getBalance(
+        create(GetBalanceRequestSchema, { upstreamId: '', peek: true })
+      ),
   })
 }
 
 /**
- * 按上游各问一趟额度，谁先回来谁先渲染。
+ * 按平台各问一趟额度，谁先回来谁先渲染。
  *
- * 一次全量要等所有平台，慢的平台拖累快的。拆成一条上游一条查询之后，
- * 各自独立：慢的那家只是它自己那张卡慢着。
- *
- * 查询键跟 useBalance 用同一个（balanceKeys.all），这样「刷新额度」写回来的
- * 数据能同时喂到两边。
+ * 查询按平台发（upstream_id 是平台 id），回来的每一条是一个账号：页面按账号
+ * 画卡。慢的那家只是它自己那几张卡慢着。
  */
 export function useBalances(upstreamIds: string[]) {
   const client = useAdminClient()
@@ -55,19 +56,21 @@ export function useBalances(upstreamIds: string[]) {
  * 为什么不用查询上的 force 参数：那种查询一挂载就发请求，每次打开面板都会
  * 去问一轮上游。强制刷新是用户点了按钮才做的事，所以走 mutation。
  *
- * 拿回来的额度直接写回列表的缓存：用户点一下看到的就是刚问回来的数。
- * 上游没报额度就是空的 —— 不拿旧数顶上，也不写 0。
+ * 先停掉在飞的额度查询（它们拿回来的是刷新前的数，晚到会把新数盖掉），刷完
+ * 按 ['balance'] 前缀整体失效：平台列表是现在的，不是闭包里那份旧的。
  */
-export function useRefreshBalance(upstreamId: string) {
+export function useRefreshBalance() {
   const client = useAdminClient()
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: () =>
-      client.getBalance(
-        create(GetBalanceRequestSchema, { upstreamId, force: true })
-      ),
-    onSuccess: (data) => {
-      queryClient.setQueryData(balanceKeys.all(upstreamId), data)
+    mutationFn: async () => {
+      await queryClient.cancelQueries({ queryKey: balanceKeys.root })
+      return client.getBalance(
+        create(GetBalanceRequestSchema, { upstreamId: '', force: true })
+      )
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: balanceKeys.root })
       toast.success('额度已刷新')
     },
     onError: (error) => {

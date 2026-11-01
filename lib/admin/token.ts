@@ -10,6 +10,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { tokenFingerprint } from "../credential.ts";
 import { dataFile } from "../paths.ts";
 
 /** 令牌文件的名字。它在数据目录里，活过容器重建。 */
@@ -32,9 +33,9 @@ let cached: string | null = null;
  * 生成的动作放在启动时（router-proxy.ts 调它），所以第一次有人访问面板时
  * 文件一定已经在那里了。
  *
- * 令牌只在**第一次生成**时打进日志：服务起来的时候人往往不在机器前，
- * 日志里露这一次面是唯一的办法。之后重启不再重复打 —— 日志不是秘密的
- * 存放处，令牌在文件里。
+ * 令牌本身不进日志：日志会被收集、转发、贴进工单，不是秘密的存放处。
+ * 第一次生成时只打文件在哪、令牌的前 4 位（够人对上是哪一把），
+ * 拿令牌去读那个文件。之后重启不再打。
  */
 export function adminToken(): string {
   if (cached) return cached;
@@ -57,8 +58,11 @@ export function adminToken(): string {
   } catch {
     /* 不是我们的文件就算了 */
   }
-  console.log(`[ADMIN] 面板令牌已生成：${token}`);
-  console.log(`        写到了 ${file}（0600）`);
+  // 只打指纹的哈希部分：随机 hex 令牌的前几位说明不了它是哪一类，只会白白
+  // 泄掉几位明文。认人用哈希就够了，令牌本身从文件读。
+  const fingerprint = tokenFingerprint(token);
+  console.log(`[ADMIN] 面板令牌已生成（${fingerprint.slice(fingerprint.indexOf("#"))}）`);
+  console.log(`        写到了 ${file}（0600），从这个文件读令牌`);
   cached = token;
   return token;
 }

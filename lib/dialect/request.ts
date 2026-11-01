@@ -38,6 +38,30 @@ function anthropicBlockToOpenAIPart(block: Json): Json | null {
   return null;
 }
 
+/**
+ * An Anthropic tool_result → the text of an OpenAI tool message.
+ *
+ * The OpenAI tool message is text only, and it has no error flag. So the text
+ * blocks are joined, a block that is not text says what it was (the model
+ * should know something was there), and an error says so up front — without
+ * the prefix the model reads a failed command's output as a success.
+ */
+function toolResultText(block: Json): string {
+  const content = block.content;
+  let text: string;
+  if (typeof content === "string") text = content;
+  else if (Array.isArray(content)) {
+    text = content
+      .map((part: Json) => {
+        if (typeof part === "string") return part;
+        if (part?.type === "text" && typeof part.text === "string") return part.text;
+        return `[${typeof part?.type === "string" ? part.type : "non-text"} block omitted]`;
+      })
+      .join("\n");
+  } else text = "";
+  return block.is_error === true ? `[tool error] ${text}` : text;
+}
+
 /** Anthropic → OpenAI chat/completions request. */
 export function anthropicToOpenAI(body: Json): Json {
   const out: Json = {};
@@ -77,7 +101,7 @@ export function anthropicToOpenAI(body: Json): Json {
         toolResults.push({
           role: "tool",
           tool_call_id: block.tool_use_id ?? "",
-          content: typeof block.content === "string" ? block.content : JSON.stringify(block.content ?? ""),
+          content: toolResultText(block),
         });
       } else {
         const part = anthropicBlockToOpenAIPart(block);
@@ -117,7 +141,7 @@ export function anthropicToOpenAI(body: Json): Json {
   }
   if (body.thinking?.type === "enabled" || body.thinking?.type === "adaptive") {
     const effort = effortOf(body);
-    if (effort) out.reasoning_effort = effort;
+    if (effort && !effortIsOff(effort)) out.reasoning_effort = effort;
   }
   if (typeof body.stream === "boolean") out.stream = body.stream;
   return out;
@@ -137,6 +161,8 @@ export function anthropicToOpenAI(body: Json): Json {
  * only way the top level survives the Anthropic dialect.
  */
 export function effortOf(body: Json): string | undefined {
+  // "none" is a level too: the caller asked for no thinking. It is returned as
+  // it is, and the conversions below read it as "off".
   for (const value of [body.output_config?.effort, body.effort, body.reasoning_effort]) {
     if (typeof value === "string" && value.trim()) return value.trim().toLowerCase();
   }
@@ -156,9 +182,36 @@ export function effortFromBudget(budget: unknown): string {
   return "max";
 }
 
+/** Does this level mean "do not think"? */
+export function effortIsOff(effort: unknown): boolean {
+  return effort === "none";
+}
+
+/** The smallest thinking budget the Anthropic dialect accepts. */
+export const MIN_THINKING_BUDGET = 1024;
+
+/**
+ * The thinking a request asks for, in the Anthropic shape, or null for none.
+ *
+ * The budget is part of max_tokens there (the upstream rejects a budget that
+ * is not below it), so it is clamped to max_tokens - 1; when that leaves less
+ * than the smallest budget the dialect accepts, there is no room to think and
+ * the request goes without.
+ */
+export function thinkingFor(effort: string | undefined, maxTokens: unknown): Json | null {
+  if (!effort || effortIsOff(effort)) return null;
+  // No limit known (the caller named none and gave no default): nothing to clamp to.
+  const ceiling = typeof maxTokens === "number" && Number.isFinite(maxTokens) ? Math.floor(maxTokens) - 1 : Infinity;
+  const budget = Math.min(budgetFromEffort(effort), ceiling);
+  if (!(budget >= MIN_THINKING_BUDGET)) return null;
+  return { type: "enabled", budget_tokens: budget };
+}
+
 /** OpenAI reasoning effort → Anthropic thinking budget. */
 export function budgetFromEffort(effort: unknown): number {
   switch (effort) {
+    // "minimal" still thinks (the OpenAI meaning: as little as it can), so it
+    // gets the smallest budget rather than none.
     case "minimal":
     case "low":
       return 2048;
@@ -272,10 +325,8 @@ export function openaiToAnthropic(body: Json, defaultMaxTokens: number): Json {
       out.tool_choice = { type: "tool", name: tc.function.name };
     }
   }
-  const effort = effortOf(body);
-  if (effort) {
-    out.thinking = { type: "enabled", budget_tokens: budgetFromEffort(effort) };
-  }
+  const thinking = thinkingFor(effortOf(body), out.max_tokens);
+  if (thinking) out.thinking = thinking;
   if (typeof body.stream === "boolean") out.stream = body.stream;
   return out;
 }

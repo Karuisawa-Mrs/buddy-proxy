@@ -3,6 +3,25 @@
 本项目里的 skill（`hello-js-reverse-skill`）放在 `.agents/skills/`，OpenCode 与 pi 都能读到；
 pi 侧再配一个 agent 定义，让它只出现在 subagent 的提示里。
 
+## 来源与安装（不在仓库里）
+
+`hello-js-reverse-skill` 是第三方技能（上游 [WhiteNightShadow/hello_js_reverse_skill](https://github.com/WhiteNightShadow/hello_js_reverse_skill)，
+上游没有声明许可证），所以它和配套的 `.pi/agents/js-reverse.md` 都不随仓库分发，
+已写进 `.gitignore`。要用就在本机自己装：
+
+```bash
+git clone https://github.com/WhiteNightShadow/hello_js_reverse_skill .agents/skills/hello-js-reverse-skill
+```
+
+`.pi/agents/js-reverse.md` 照下面「组成」一节的字段自己写一份（`inheritSkills: false`、
+`skills: hello-js-reverse-skill`、`skillPath: ../../.agents/skills`）。
+
+## 本机路径
+
+`.pi/agents/*.md` 的 `subagentOnlyExtensions` 写的是 `~/extensions/pi-allow-reads/packages/pi-plugin/src/index.ts`。
+如果你装的 pi-subagents 不展开 `~`，就改成本机的绝对路径（别提交）：扩展要装在
+`$HOME/extensions/pi-allow-reads/`。
+
 ## skill 放哪
 
 `.agents/skills/hello-js-reverse-skill/` 是唯一一份技能正文。两个客户端都读这个位置：

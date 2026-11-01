@@ -4,6 +4,7 @@ import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
   AccountSchema,
+  CredentialSchema,
   ListAccountsResponseSchema,
   ListCredentialsResponseSchema,
   ListProviderKindsResponseSchema,
@@ -304,12 +305,12 @@ describe('七牛云的凭据', () => {
       ListCredentials: () =>
         create(ListCredentialsResponseSchema, { credentials: [] }),
       SetProviderKeys: (input) => {
-        const keys = input.keys ?? []
-        sent.push(keys)
+        // 按段写：没给的段是 undefined，记成 '-'（不改）。
+        sent.push([input.apiKey ?? '-', input.portalCookie ?? '-'])
         return create(SetProviderKeysResponseSchema, {
           ok: true,
           message: '写好了',
-          count: keys.length,
+          count: 1,
         })
       },
     })
@@ -334,7 +335,7 @@ describe('七牛云的凭据', () => {
     expect(await screen.findByLabelText('门户 Cookie')).toBeInTheDocument()
   })
 
-  it('只填门户 cookie：推理 key 留空也要占着位置', async () => {
+  it('只填门户 cookie：推理 key 不带上去（留空就是不改）', async () => {
     const user = userEvent.setup({ delay: null })
     const sent: string[][] = []
 
@@ -352,11 +353,11 @@ describe('七牛云的凭据', () => {
     await user.click(screen.getByRole('button', { name: '保存' }))
 
     await waitFor(() => {
-      expect(sent).toEqual([['', 'c=1']])
+      expect(sent).toEqual([['-', 'c=1']])
     })
   })
 
-  it('两段都填：推理 key 在前，门户 cookie 在后', async () => {
+  it('两段都填：两段各带各的字段', async () => {
     const user = userEvent.setup({ delay: null })
     const sent: string[][] = []
 
@@ -379,7 +380,7 @@ describe('七牛云的凭据', () => {
     })
   })
 
-  it('两段都空：两段都传空串上去，清不清理由后端决定', async () => {
+  it('两段都空：保存按钮不能点，什么都不发（空值不会清掉已有的凭据）', async () => {
     const user = userEvent.setup({ delay: null })
     const sent: string[][] = []
 
@@ -393,11 +394,9 @@ describe('七牛云的凭据', () => {
     )
     await user.click(await screen.findByRole('button', { name: '凭据' }))
 
+    expect(screen.getByRole('button', { name: '保存' })).toBeDisabled()
     await user.click(screen.getByRole('button', { name: '保存' }))
-
-    await waitFor(() => {
-      expect(sent).toEqual([['', '']])
-    })
+    expect(sent).toEqual([])
   })
 })
 
@@ -429,7 +428,8 @@ describe('按 kind 的 login 给入口', () => {
       ListAccounts: () => create(ListAccountsResponseSchema, { accounts: [] }),
       ListCredentials: () => create(ListCredentialsResponseSchema, { credentials: [] }),
       SetProviderKeys: (input) => {
-        sent?.push(input.keys ?? [])
+        // 按段写：星火只有 api_key 一段；清除走 clear。
+        sent?.push(input.clear ? ['<clear>'] : [input.apiKey ?? '-'])
         return create(SetProviderKeysResponseSchema, { ok: true })
       },
     })
@@ -536,16 +536,40 @@ describe('按 kind 的 login 给入口', () => {
     })
   })
 
-  it('讯飞星火：留空提交表示清掉那把 key', async () => {
+  it('讯飞星火：留空不能保存，清掉 key 要走「清除凭据」并确认', async () => {
     const user = userEvent.setup({ delay: null })
     const sent: string[][] = []
 
     renderWithClient({
-      client: kindsClient(
-        [upstream('xinghuo', 'xinghuo', '讯飞星火', [accountOf('xinghuo-1', 'xinghuo', '星火一')])],
-        [{ kind: 'xinghuo', login: 'api_key' }],
-        sent
-      ),
+      client: mockAdminClient({
+        ListUpstreams: () =>
+          create(ListUpstreamsResponseSchema, {
+            upstreams: [
+              upstream('xinghuo', 'xinghuo', '讯飞星火', [accountOf('xinghuo-1', 'xinghuo', '星火一')]),
+            ],
+          }),
+        ListProviderKinds: () =>
+          create(ListProviderKindsResponseSchema, {
+            kinds: [create(ProviderKindSchema, { kind: 'xinghuo', login: 'api_key' })],
+          }),
+        ListAccounts: () => create(ListAccountsResponseSchema, { accounts: [] }),
+        // 账号上已经有一把 key：弹窗据此给「清除凭据」，并在占位里显示掩码。
+        ListCredentials: () =>
+          create(ListCredentialsResponseSchema, {
+            credentials: [
+              create(CredentialSchema, {
+                id: 'key:provider:xinghuo-1:account',
+                accountId: 'xinghuo-1',
+                kind: 'api_key',
+                masked: 'sk-a…',
+              }),
+            ],
+          }),
+        SetProviderKeys: (input) => {
+          sent.push(input.clear ? ['<clear>'] : [input.apiKey ?? '-'])
+          return create(SetProviderKeysResponseSchema, { ok: true })
+        },
+      }),
       children: <UpstreamsPage />,
     })
 
@@ -554,10 +578,19 @@ describe('按 kind 的 login 给入口', () => {
     )
     await user.click(await screen.findByRole('button', { name: 'API Key' }))
 
-    await user.click(await screen.findByRole('button', { name: '保存' }))
+    // 已有的 key 只以掩码出现在占位里。
+    expect(
+      await screen.findByPlaceholderText('现在是 sk-a…，留空不改')
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '保存' })).toBeDisabled()
+
+    await user.click(await screen.findByRole('button', { name: '清除凭据' }))
+    // 二次确认之前什么都不发。
+    expect(sent).toEqual([])
+    await user.click(await screen.findByRole('button', { name: '清除' }))
 
     await waitFor(() => {
-      expect(sent).toEqual([['']])
+      expect(sent).toEqual([['<clear>']])
     })
   })
 })

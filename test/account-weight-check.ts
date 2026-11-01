@@ -11,11 +11,13 @@
 //      账号带回来 —— 删了又活，凭据还串着。
 
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
-const DATA_DIR = "/tmp/opencode/test-account-weight";
+// 临时目录走系统的 tmpdir：写死的 /tmp 在 Windows 上落到当前盘的根上，
+// 而且两次运行会撞在同一个目录上。
+const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "test-account-weight-"));
 process.env.BUDDY_DATA_DIR = DATA_DIR;
-fs.rmSync(DATA_DIR, { recursive: true, force: true });
-fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
 
 const { accountsOfPlatform, addAccount, updateProvider, provider } = await import("../lib/providers.ts");
 // 删账号走 admin 层：凭据、旧位置的记录、快照里的那段，都在那边一起删。
@@ -109,7 +111,7 @@ console.log("删账号要删干净");
 
 {
   // 旧库把租户的凭据按租户号存着。删账号时这些也要删。
-  setSecret("account:tokenrhythm:2", "account", { account: "18945877841", password: "pw", apiKey: "sk_tr_old" });
+  setSecret("account:tokenrhythm:2", "account", { account: "10000000001", password: "pw", apiKey: "sk_tr_old" });
   setSecret("session:tokenrhythm:2", "session", { accountId: "tokenrhythm-2", cookie: "tr_session=old" });
   setSecret("key:provider:tokenrhythm:tenant-2", "key", { key: "sk_tr_old" });
 
@@ -144,7 +146,7 @@ console.log("删过的账号不会被旧记录带回来");
   // 旧位置有一条它的记录：旧库按租户号存，那一号就是它自己名字里的那个号。
   const index = Number(id.split("-")[1] ?? 1);
   const legacyId = `account:tokenrhythm:${index}`;
-  setSecret(legacyId, "account", { account: "18252587721", password: "pw", apiKey: "sk_tr_3" });
+  setSecret(legacyId, "account", { account: "10000000002", password: "pw", apiKey: "sk_tr_3" });
   deleteAccount(id);
   check("删干净了", provider(id) === null && getSecret(legacyId) === null, legacyId);
 

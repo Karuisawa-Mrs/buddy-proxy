@@ -9,7 +9,7 @@ import type { Json } from "../json.ts";
 import Koa from "koa";
 import Router from "@koa/router";
 import bodyParser from "koa-bodyparser";
-import { authenticate, loadKeys, requireApiKey } from "../api-keys.ts";
+import { authenticate, currentKeys, requireApiKey } from "../api-keys.ts";
 import { PLATFORMS, platformPolicies, platformPolicy } from "../platforms.ts";
 import { accountsOfPlatform } from "../providers.ts";
 import { kindOf } from "../provider-kinds.ts";
@@ -26,10 +26,15 @@ import {
 } from "../admin/upstreams.ts";
 import { sendError } from "./deliver.ts";
 import { handle } from "./handle.ts";
+import { jsonLimit } from "./body-limit.ts";
 import { listCooldowns, type CooldownRow } from "../cooldown.ts";
 import { modelsOfPlatform, platformServing, serveModels } from "./catalog-routes.ts";
 
-const keys = loadKeys();
+// Read once at startup so that a fresh install has its keys generated (and
+// says so in the log) before the first request. The check itself reads them
+// again — see currentKeys() — so a rotated or revoked key takes effect without
+// a restart.
+currentKeys();
 export const app = new Koa();
 const router = new Router();
 
@@ -71,14 +76,17 @@ app.use(async (ctx, next) => {
 // The body is only parsed once the caller is allowed in: a request with a bad
 // key should not cost a megabyte of parsing.
 const requireKey: Koa.Middleware = async (ctx, next) => {
-  if (!authenticate(ctx.headers as Record<string, unknown>, keys)) {
+  if (!authenticate(ctx.headers as Record<string, unknown>)) {
     ctx.status = 401;
     ctx.body = { error: { type: "authentication_error", message: "invalid api key" } };
     return;
   }
   await next();
 };
-const parseBody = bodyParser({ enableTypes: ["json"], jsonLimit: "64mb" });
+// The largest request body: a long conversation with a few images fits well
+// under it, and a body bigger than this is held in memory whole before
+// anything can refuse it. A deployment that needs more says so.
+const parseBody = bodyParser({ enableTypes: ["json"], jsonLimit: jsonLimit() });
 
 /**
  * The parts of /health that ask the upstreams live in lib/admin/upstreams.ts,
@@ -90,6 +98,14 @@ const parseBody = bodyParser({ enableTypes: ["json"], jsonLimit: "64mb" });
  * account is there too, saying so.
  */
 router.get("/health", async (ctx) => {
+  // With the front door locked, the details (the accounts, the credential
+  // fingerprints, the quotas, the upstream bases) are for the holders of a key
+  // only. Anyone may still ask whether the gateway is up. In public mode
+  // nothing changes: the door is open anyway.
+  if (requireApiKey() && !authenticate(ctx.headers as Record<string, unknown>)) {
+    ctx.body = { status: "ok" };
+    return;
+  }
   const snapshot = healthSnapshot();
   // 冷却在回答之前就要知道：面板说 READY、网关说 503「冷却中」，两边对不上，
   // 排查的人只能猜。冷却是按账号记的，所以放在账号那一行上。
@@ -216,7 +232,7 @@ for (const base of ["", "/:platform"]) {
     await handle(ctx, "openai", String(ctx.params.platform ?? "") || undefined);
   });
 
-  router.get(`${base}/v1/models`, serveModels);
+  router.get(`${base}/v1/models`, requireKey, serveModels);
 }
 
 /**

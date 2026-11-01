@@ -118,7 +118,7 @@ console.log("the identity");
 
 // The headers a request the official client actually made carried.
 const session = {
-  uid: "9efe1321-da5f-47e8-8077-455cec3c7009",
+  uid: "00000000-0000-4000-8000-000000000001",
   domain: "www.workbuddy.cn",
   accessToken: "token",
   refreshToken: "refresh",

@@ -11,8 +11,10 @@
 // the files that are already over the limit cannot be made smaller by a gate
 // that suddenly fails. Use --strict once the list is empty.
 //
-// The generated contract (lib/gen) is not counted: it is written by buf, not
-// by hand.
+// Checked: lib/, web/src/, router-proxy.ts and config-cli.ts. Not counted:
+// what a tool writes (the contract in lib/gen and web/.gen, the route tree in
+// web/src/routeTree.gen.ts) and the shadcn copies in web/src/components/ui,
+// which follow upstream rather than this repository.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -22,17 +24,17 @@ const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const LIMIT = 400;
 // The generated contract: buf writes it, so it is as long as the contract
 // says and nothing else.
-const GENERATED = path.join("lib", "gen");
+const SKIPPED_DIRS = new Set([path.join("lib", "gen"), path.join("web", "src", "components", "ui")]);
 
-/** The files that are checked: lib/**\/*.ts and the router itself. */
+/** The files that are checked: the .ts/.tsx under a directory, minus the generated ones. */
 function sources(dir: string): string[] {
   const out: string[] = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (path.relative(ROOT, full) === GENERATED) continue;
+      if (SKIPPED_DIRS.has(path.relative(ROOT, full))) continue;
       out.push(...sources(full));
-    } else if (entry.name.endsWith(".ts")) {
+    } else if (/\.tsx?$/.test(entry.name) && !/\.gen\.tsx?$/.test(entry.name)) {
       out.push(full);
     }
   }
@@ -47,7 +49,12 @@ function lineCount(file: string): number {
   return lines.length;
 }
 
-const files = [...sources(path.join(ROOT, "lib")), path.join(ROOT, "router-proxy.ts")];
+const files = [
+  ...sources(path.join(ROOT, "lib")),
+  ...sources(path.join(ROOT, "web", "src")),
+  path.join(ROOT, "router-proxy.ts"),
+  path.join(ROOT, "config-cli.ts"),
+];
 const over = files
   .map((file) => ({ path: path.relative(ROOT, file), lines: lineCount(file) }))
   .filter((f) => f.lines > LIMIT)

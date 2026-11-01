@@ -88,9 +88,11 @@ import {
   upstreamRegion,
   upstreamState,
   upstreamCooling,
+  quotaPlatformIds,
   type QuotaView,
   type UpstreamId,
 } from "./upstreams.ts";
+import type { PanelQuota } from "./quota-status.ts";
 import { coolingOf } from "./upstream-state.ts";
 import {
   deleteAccount,
@@ -182,10 +184,13 @@ function wholeMs(value: unknown): number {
 }
 
 /** 一个额度摘要。 */
-export function quotaMessage(quota: QuotaView) {
+export function quotaMessage(quota: PanelQuota) {
   return create(UpstreamQuotaSchema, {
     upstreamId: quota.upstreamId,
     accountId: quota.accountId,
+    // 这一轮没问到：说为什么；数是上一次的就标旧。
+    error: quota.error ?? "",
+    stale: quota.stale === true,
     // 余额（钱）。只有中转站这类平台有。
     balance: quota.balance
       ? create(BalanceSummarySchema, {
@@ -647,7 +652,12 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
     // 位置有意义（七牛的凭据是两段：推理 key 与门户 cookie），空串留着占位。
     // 各分支自己决定怎么处理空串。
     const keys = (request.keys ?? []).map((k) => String(k).trim());
-    const result = setProviderKeys(upstreamId, keys);
+    // 按段写（面板）：没给的段不改；清除只认 clear。
+    const result = setProviderKeys(upstreamId, keys, {
+      apiKey: request.apiKey,
+      portalCookie: request.portalCookie,
+      clear: request.clear === true,
+    });
     return create(SetProviderKeysResponseSchema, {
       ok: result.ok,
       message: result.message,
@@ -669,22 +679,24 @@ export const adminService: Partial<ServiceImpl<typeof AdminService>> = {
 
   async getBalance(request) {
     const wanted = String(request.upstreamId ?? "");
+    const peek = Boolean(request.peek);
     const quotas = [];
     if (wanted) {
-      // 问一个平台：只刷这个平台名下的账号，不碰别人。
-      for (const quota of await upstreamQuotas(wanted, true, Boolean(request.force))) {
+      // 问一个平台：只刷这个平台名下的账号，不碰别人。peek 就只读快照。
+      for (const quota of await upstreamQuotas(wanted, !peek, !peek && Boolean(request.force))) {
         quotas.push(quotaMessage(quota));
       }
-    } else {
-      // 没指定平台：整轮刷新一次（一次就够），然后从快照里读。
-      await freshHealthSnapshot(Boolean(request.force));
-      for (const row of listProviders()) {
-        for (const quota of await upstreamQuotas(row.id)) {
-          quotas.push(quotaMessage(quota));
-        }
+      return create(GetBalanceResponseSchema, { quotas });
+    }
+    // 没指定平台。peek（额度页首屏）只读快照、不等刷新：最慢的平台不该拖住
+    // 整页，各平台的现数由面板按平台各问一趟。不带 peek 的老调用照旧整轮刷新。
+    if (!peek) await freshHealthSnapshot(Boolean(request.force));
+    for (const row of listProviders()) {
+      for (const quota of await upstreamQuotas(row.id)) {
+        quotas.push(quotaMessage(quota));
       }
     }
-    return create(GetBalanceResponseSchema, { quotas });
+    return create(GetBalanceResponseSchema, { quotas, upstreamIds: quotaPlatformIds() });
   },
 
   /* ---------------- 用量 ---------------- */

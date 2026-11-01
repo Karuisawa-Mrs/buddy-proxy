@@ -12,7 +12,12 @@ services:
     container_name: buddy-router
     command: ["node", "router-proxy.ts"]
     ports:
-      - "6450:6450"
+      # Bound to loopback only: the gateway holds account credentials and the
+      # front door is public mode by default, so a 0.0.0.0 bind would put an
+      # open proxy on the whole LAN. To reach it from another device, bind the
+      # Tailscale address instead (100.113.106.73:6450:6450) or use
+      # `tailscale serve`; do not go back to a bare "6450:6450".
+      - "127.0.0.1:6450:6450"
     environment:
       # Which upstreams this router serves is NOT decided here. The switch of an
       # upstream is the `enabled` column of the provider table: the panel's
@@ -20,6 +25,11 @@ services:
       # built-in upstream off.
       # Anthropic and OpenAI dialects, routed per model name.
       ROUTER_PORT: "6450"
+      # The port above is published on the host's loopback only, so the
+      # container's own 0.0.0.0 bind is not reachable from the LAN: this tells
+      # the gateway that its "listening on every interface" warning can drop to
+      # a note. Remove it if the port mapping ever stops being loopback-only.
+      ROUTER_PUBLISH_LOOPBACK_ONLY: "1"
       # Everything the service keeps lives in this one directory: the database
       # with the credentials and the settings, the credential log, the salt the
       # device fingerprint is derived from. It has to survive a rebuild.
@@ -38,8 +48,11 @@ services:
     # The TokenRhythm accounts and their keys, and the MiniMax plan key, come
     # from the .env file next to this one. The proxy reads the ones it knows
     # by name; nothing else in the file is loaded.
+    # Optional: without a .env the service still starts (the accounts live in
+    # the database); `required: false` needs Compose v2.24 or newer.
     env_file:
-      - .env
+      - path: .env
+        required: false
     volumes:
       # The OAuth sessions are credentials, not configuration. This directory must
       # survive rebuilds — the refresh tokens rotate on every refresh, so a lost

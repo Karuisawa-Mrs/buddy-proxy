@@ -1,12 +1,8 @@
-# The image only needs package.json, pnpm-lock.yaml, router-proxy.ts and lib/,
-# all copied explicitly by the Dockerfile. Everything else stays out of the build
-# context.
+# The Dockerfile copies these by name, so they must stay visible: package.json,
+# pnpm-lock.yaml, pnpm-workspace.yaml, router-proxy.ts, config-cli.ts, lib/, and
+# web/ (with its own package.json, pnpm-lock.yaml, pnpm-workspace.yaml).
+# Everything else stays out of the build context.
 
-# Other proxy entry points and their shared local state
-v1-proxy.mjs
-v2-proxy.ts
-free-features.ts
-free_models.json
 tsconfig.json
 mise.toml
 
@@ -22,9 +18,30 @@ api-keys.json
 oc-workspace/
 .cortexkit/
 
+# The root dependencies are installed inside the image (pnpm install in the
+# Dockerfile); a local node_modules would only bloat the context, and its
+# native builds are for the host, not for alpine.
+node_modules/
+
 # Not needed at runtime: the tests run on a machine, not in the image.
 test/
 tools/
+
+# The database, the credentials and the logs of a local run: never in an image.
+data/
+*.db
+*.db-wal
+*.db-shm
+admin-token
+
+# Tooling for the people and agents working on the repository.
+.agents/
+.pi/
+helper/
+*.patch
+部署说明.md
+HANDOVER.md
+AGENTS.md
 
 # Not needed at runtime, and the NAS deployment ships a compose file instead
 Dockerfile

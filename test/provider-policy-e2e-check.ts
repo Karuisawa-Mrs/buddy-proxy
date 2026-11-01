@@ -16,7 +16,7 @@
 //   5. 降级不是什么都换：请求本身的问题（400）不换账号。
 //   6. 面板那一层的边界：这一类上游不支持的策略被拒；上游带回来的新策略。
 //   7. 面板上改策略 → 立刻生效 → 请求落到预期账号（真浏览器点面板；
-//      面板没构建时这一段跳过，用 REQUIRE_BROWSER=1 让它变成失败）。
+//      面板没构建或没有 agent-browser 时这一段跳过，用 REQUIRE_BROWSER=1 让它变成失败）。
 
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -594,8 +594,11 @@ async function abRetry(
 
 const panelBuilt = fs.existsSync(path.join(ROOT, "web/dist/index.html"));
 const browserSession = `policy-e2e-${process.pid}`;
+// 面板构建了（check 现在先跑 web:build）不等于机器上有浏览器：没有 agent-browser
+// 也跳过，和没构建一样；REQUIRE_BROWSER=1（test:policy:browser）时才算失败。
+const browserThere = panelBuilt && (await ab(browserSession, ["--version"])).code !== 127;
 
-if (panelBuilt) {
+if (panelBuilt && browserThere) {
   // 租户 1 的推理端点挂（500），租户 2 是好的：改成降级之后请求就该落到租户 2。
   const tenant1 = richTenant("2026-11-20T00:00:00.000Z");
   tenant1.inference = { status: 500, body: { code: "INTERNAL_ERROR", message: "假上游挂了" } };
@@ -644,7 +647,9 @@ if (panelBuilt) {
     await ab(browserSession, ["close"]);
   }
 } else {
-  const why = "面板没构建（web/dist/index.html 不在）。先 cd web && pnpm build。";
+  const why = panelBuilt
+    ? "机器上没有 agent-browser（真浏览器那一段要它）。"
+    : "面板没构建（web/dist/index.html 不在）。先 cd web && pnpm build。";
   if (process.env.REQUIRE_BROWSER === "1") {
     check("面板这一段跑了", false, why);
   } else {

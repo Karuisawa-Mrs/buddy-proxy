@@ -107,6 +107,7 @@ export interface PublishedTargetView {
  * 只说「接不了」不够用：面板上要能看出是模型没了、平台关了，还是没登录。
  */
 const BLOCKER_REASON_LABELS: Partial<Record<UnpublishedReason, string>> = {
+  // MODEL_GONE 已不再产出（见 targetBlocker 末尾）：文案只为旧数据留着。
   [UnpublishedReason.MODEL_GONE]: "模型已下架",
   [UnpublishedReason.UPSTREAM_DISABLED]: "平台已停用",
   [UnpublishedReason.NO_CREDENTIAL]: "没有可用凭据",

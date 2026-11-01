@@ -7,9 +7,10 @@
 // status 仍是字符串），那是给人看的词。
 
 import { CredentialState } from "../gen/buddy/admin/v1/admin_pb.ts";
-import { writeQiniuAccount } from "../qiniu/account.ts";
-import { writeXinghuoKey } from "../xinghuo/account.ts";
-import { providerKindOf } from "../providers.ts";
+import { clearQiniuAccount, qiniuAccountOf, writeQiniuAccount } from "../qiniu/account.ts";
+import { clearXinghuoKey, writeXinghuoKey } from "../xinghuo/account.ts";
+import { accountsOfPlatform, provider, providerKindOf } from "../providers.ts";
+import { platformOf } from "../platforms.ts";
 
 /**
  * 上游报的状态 → 契约里的枚举。
@@ -34,11 +35,14 @@ import { providerKindOf } from "../providers.ts";
  * 时候把自己写回数据库，删掉的账号转眼又有一把 key）。
  */
 export function setProviderKeys(
-  upstreamId: string,
+  requestedId: string,
   keys: string[],
+  parts?: KeyParts,
 ): { ok: boolean; message: string; count: number } {
-  const kind = providerKindOf(upstreamId);
-  if (kind?.kind === "minimax" || upstreamId === "minimax") {
+  // 老的调用方传平台 id（qiniu / xinghuo）。账号 id 不复用之后，同名的那一行
+  // 可能早就删了：照着平台 id 写，就是一份谁也认领不了、也删不掉的凭据。所以
+  // 先认成一个真在的账号；认不出来就拒绝。
+  if (requestedId === "minimax" || providerKindOf(requestedId)?.kind === "minimax") {
     // Code 网关只用会话：额度也走会话，没有要贴的 key。
     return {
       ok: false,
@@ -46,6 +50,21 @@ export function setProviderKeys(
       count: 0,
     };
   }
+  const upstreamId = accountIdFor(requestedId);
+  if (upstreamId === null) {
+    const kind = platformOf(requestedId)?.kind;
+    if (kind === "qiniu" || kind === "xinghuo") {
+      return { ok: false, message: `${requestedId} 下还没有账号：先加一个账号，再往账号上写 key`, count: 0 };
+    }
+    const message = kind ? `这个 Provider 不接受 API Key：${requestedId}` : `没有这个账号：${requestedId}`;
+    return { ok: false, message, count: 0 };
+  }
+  // 按段写：没给的段不改。面板走这一条 —— 按位置写的那份里空串就是「清掉」，
+  // 弹窗里留空一段等于把已有的那段删了。
+  if (parts && (parts.clear || parts.apiKey !== undefined || parts.portalCookie !== undefined)) {
+    return setProviderKeyParts(upstreamId, parts);
+  }
+  const kind = providerKindOf(upstreamId);
   if (kind?.kind === "qiniu" || upstreamId === "qiniu") {
     // 七牛云的凭据有两段：推理用的 API key 与门户 cookie（额度只认 cookie）。
     // 位置就是顺序：第一段是 key，第二段是 cookie。空的那段表示清掉它。
@@ -73,6 +92,68 @@ export function setProviderKeys(
     };
   }
   // 别的平台没有「贴一把 key」这一步：它们的凭据各有各的形状。
+  return { ok: false, message: `这个 Provider 不接受 API Key：${upstreamId}`, count: 0 };
+}
+
+/**
+ * 按段写的那几样。
+ *
+ * undefined 是「这一段不改」；空串也当不改（空值不是清除的写法，清除只有
+ * clear 一条路，免得误点保存把已有的凭据抹掉）。
+ */
+export interface KeyParts {
+  apiKey?: string;
+  portalCookie?: string;
+  clear?: boolean;
+}
+
+/**
+ * 按段写一个账号的 key：只覆盖给了值的那一段。
+ *
+ * id 的认法与按位置写的老路一样：先认账号行；认不出来而传的是平台 id
+ * （qiniu / xinghuo）时也收 —— 老的调用方拿平台 id 写，按段写不能比它窄。
+ */
+function setProviderKeyParts(
+  upstreamId: string,
+  parts: KeyParts,
+): { ok: boolean; message: string; count: number } {
+  const kind = providerKindOf(upstreamId)?.kind;
+  const given = (value: string | undefined) => String(value ?? "").trim();
+  if (kind === "qiniu") {
+    if (parts.clear) {
+      clearQiniuAccount(upstreamId);
+      return { ok: true, message: "清掉了七牛云的凭据", count: 0 };
+    }
+    const apiKey = given(parts.apiKey);
+    const portalCookie = given(parts.portalCookie);
+    if (!apiKey && !portalCookie) {
+      return { ok: false, message: "没有要写的东西：两段都是空的。要清掉凭据请用「清除」", count: 0 };
+    }
+    // 没给的那段取库里现在那份：只换给了的那一段。
+    const current = qiniuAccountOf(upstreamId);
+    const count = writeQiniuAccount(upstreamId, {
+      apiKey: apiKey || current?.apiKey || "",
+      portalCookie: portalCookie || current?.portalCookie || "",
+    });
+    const message =
+      apiKey && portalCookie
+        ? "写了 API key 与门户 cookie"
+        : apiKey
+          ? "写了 API key，门户 cookie 没动"
+          : "写了门户 cookie，API key 没动";
+    return { ok: true, message, count };
+  }
+  if (kind === "xinghuo") {
+    if (parts.clear) {
+      clearXinghuoKey(upstreamId);
+      return { ok: true, message: "清掉了讯飞星火的 API key", count: 0 };
+    }
+    const apiKey = given(parts.apiKey);
+    if (!apiKey) {
+      return { ok: false, message: "API key 是空的。要清掉它请用「清除」", count: 0 };
+    }
+    return { ok: true, message: "写了讯飞星火的 API key", count: writeXinghuoKey(upstreamId, apiKey) };
+  }
   return { ok: false, message: `这个 Provider 不接受 API Key：${upstreamId}`, count: 0 };
 }
 
@@ -179,4 +260,15 @@ export function parseCredentialId(id: string): CredentialRef | null {
     return null;
   }
   return null;
+}
+
+/**
+ * 把面板传来的 id 认成一个真在的账号行。
+ *
+ * 账号 id 直接认；平台 id 认成该平台的第一个账号（写法同 login.ts 的
+ * accountFor）。都认不出来就是 null。
+ */
+function accountIdFor(id: string): string | null {
+  if (provider(id)) return id;
+  return accountsOfPlatform(id)[0]?.id ?? null;
 }

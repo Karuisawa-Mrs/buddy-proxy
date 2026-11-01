@@ -63,7 +63,9 @@ services:
     container_name: buddy-proxy
     restart: unless-stopped
     ports:
-      - "6450:6450"
+      # Loopback only: the gateway holds account credentials. To reach it from
+      # another device, bind a private address (e.g. a Tailscale IP) instead.
+      - "127.0.0.1:6450:6450"
     volumes:
       # /data has to be persistent: the sessions live in it, and a lost
       # session means logging in again.
@@ -71,7 +73,15 @@ services:
     environment:
       ROUTER_PORT: "6450"
       BUDDY_DATA_DIR: /data
+    # Optional: the accounts live in the database, a .env only adds keys the
+    # service asks for by name (needs Compose v2.24+ for `required`).
+    env_file:
+      - path: .env
+        required: false
 ```
+
+The repository's own `docker-compose.yml` is the full version of this, with a
+comment on every setting.
 
 ```bash
 docker compose up -d

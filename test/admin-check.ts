@@ -6,13 +6,17 @@
 // 端点：令牌对不对、二十个方法答不答得上、老的 JSON 路由没了没有、/health
 // 还是不是公开的。
 
+import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { startGateway as startHarness, type Gateway } from "./harness.ts";
+import { DEAD_UPSTREAMS, startGateway as startHarness, type Gateway } from "./harness.ts";
 import { tokenPlanView } from "../lib/admin/upstreams.ts";
 
-const DATA_DIR = "/tmp/opencode/test-admin-check";
+// 临时目录走系统的 tmpdir：写死的 /tmp 在 Windows 上落到当前盘的根上，
+// 而且两次运行会撞在同一个目录上。
+const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "test-admin-check-"));
 const SERVICE = "/buddy.admin.v1.AdminService";
 
 let pass = 0;
@@ -88,6 +92,8 @@ async function startRouter(): Promise<Gateway> {
     dataDir: DATA_DIR,
     keepDataDir: true,
     env: {
+      // 平台的登录态、套餐、目录接口这里不测：指到回环的死端口（连不上是预期）。
+      ...DEAD_UPSTREAMS,
       // 上游全关：自测不碰任何平台。
       MINIMAX_CODE: "",
       QODER_GLOBAL: "",
@@ -103,8 +109,6 @@ async function startRouter(): Promise<Gateway> {
 
 // 上一次跑留下的库会让「改完要重启才生效」这类断言失去意义：启动时读到的
 // 就是上次的值，没什么可改。所以每次都从空的目录开始。
-fs.rmSync(DATA_DIR, { recursive: true, force: true });
-fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
 
 router = await startRouter();
 
@@ -119,12 +123,16 @@ console.log("令牌");
 const tokenFile = path.join(DATA_DIR, "admin-token");
 check("令牌文件生成了", fs.existsSync(tokenFile));
 const mode = fs.existsSync(tokenFile) ? fs.statSync(tokenFile).mode & 0o777 : 0;
-check("令牌文件是 0600", mode === 0o600, `0${mode.toString(8)}`);
+// Windows 没有 POSIX 权限位：stat 出来总是 0666，这一项只在类 Unix 上有意义。
+if (process.platform !== "win32") check("令牌文件是 0600", mode === 0o600, `0${mode.toString(8)}`);
 const token = fs.existsSync(tokenFile) ? fs.readFileSync(tokenFile, "utf8").trim() : "";
 
-// 第一次起来的时候，日志里要看得见完整的令牌：人不在机器前，这是唯一的
-// 一次机会。
-check("日志里有令牌", log().includes(`[ADMIN] 面板令牌已生成：${token}`), log().slice(0, 200));
+// 日志会被采集、长期保留，所以令牌的明文一位都不进日志：只给指纹的哈希认人，
+// 再说清令牌写在哪个文件，人去读那个文件。
+const tokenHash = crypto.createHash("sha256").update(token, "utf8").digest("hex").slice(0, 8);
+check("日志里有令牌的哈希指纹", log().includes(`[ADMIN] 面板令牌已生成（#${tokenHash}）`), log().slice(0, 200));
+check("日志里没有令牌的明文前缀", token.length > 4 && !log().includes(`${token.slice(0, 4)}…`), log().slice(0, 200));
+check("日志里没有完整令牌", token.length > 4 && !log().includes(token), log().slice(0, 200));
 check("日志里说了令牌写在哪", log().includes(`写到了 ${tokenFile}（0600）`), log().slice(0, 200));
 check("令牌没有出现在 /health 里", !JSON.stringify(healthOf(base)).includes(token));
 

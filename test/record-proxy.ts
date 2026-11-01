@@ -17,7 +17,9 @@
 //   /minimax/...            the MiniMax Code gateway (MINIMAX_RECORD_BASE)
 //   /tokenrhythm/...        tokenrhythm.studio
 //
-// The fixtures land in test/fixtures/, one file per method and path.
+// The fixtures land in test/fixtures/ (or FIXTURE_DIR_OUT), one file per method
+// and path, scrubbed on the way: the account's fields are replaced and only the
+// headers the replay needs are kept (test/fixture-scrub.ts).
 
 import http from "node:http";
 

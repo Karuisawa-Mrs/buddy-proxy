@@ -576,5 +576,104 @@ class SyncCheckTest(unittest.TestCase):
         )
 
 
+class ApiKeyHeaderTest(unittest.TestCase):
+    """读 /health 时带上 api key：网关开了 REQUIRE_API_KEY，不带 key 只答 status。
+
+    起一个本机的假网关（127.0.0.1 随机端口），只看请求头，不连真网关。
+    """
+
+    def setUp(self):
+        import http.server
+        import threading
+
+        seen = self.seen = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802
+                seen.append((self.path, self.headers.get("Authorization")))
+                if self.headers.get("Authorization") != "Bearer oc-good":
+                    body = json.dumps({"status": "ok"}).encode()
+                elif self.path == "/health":
+                    body = json.dumps(
+                        {
+                            "status": "ok",
+                            "providers": [{"id": "minimax", "name": "MiniMax"}],
+                            "upstreams": {"minimax": {"accounts": [account("minimax", percent=10)]}},
+                        }
+                    ).encode()
+                else:
+                    body = json.dumps({"data": []}).encode()
+                self.send_response(200)
+                self.send_header("content-type", "application/json")
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        self.server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        self.gateway = f"http://127.0.0.1:{self.server.server_address[1]}"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+    def test_todo_sends_the_key_to_health(self):
+        accounts, err = buddy_todo.read_accounts(self.gateway, "oc-good")
+        self.assertEqual(err, "")
+        self.assertEqual([a["id"] for a in accounts], ["minimax"])
+        self.assertEqual(self.seen[-1], ("/health", "Bearer oc-good"))
+
+    def test_todo_without_the_right_key_sees_no_accounts(self):
+        accounts, _err = buddy_todo.read_accounts(self.gateway, "public")
+        self.assertEqual(accounts, [])
+        self.assertEqual(self.seen[-1], ("/health", "Bearer public"))
+
+    def test_sync_sends_the_key_to_health_and_models(self):
+        saved = buddy_sync.API_KEY
+        buddy_sync.API_KEY = "oc-good"
+        try:
+            providers, err = buddy_sync.fetch_providers(self.gateway)
+            self.assertEqual(err, "")
+            self.assertEqual(providers, [("minimax", "MiniMax")])
+            models, err = buddy_sync.fetch_models(self.gateway, "")
+            self.assertIsNone(err)
+        finally:
+            buddy_sync.API_KEY = saved
+        self.assertEqual(self.seen, [("/health", "Bearer oc-good"), ("/v1/models", "Bearer oc-good")])
+
+
+class WindowsOpencodeConfigTest(unittest.TestCase):
+    """Windows 的 opencode 目标：按 /mnt/c/Users 下实际存在的目录找，不写死用户名。"""
+
+    def setUp(self):
+        self.saved = buddy_sync.WINDOWS_USERS_ROOT
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = pathlib.Path(self.tmp.name)
+        buddy_sync.WINDOWS_USERS_ROOT = self.root
+
+    def tearDown(self):
+        buddy_sync.WINDOWS_USERS_ROOT = self.saved
+        self.tmp.cleanup()
+
+    def test_finds_the_user_dir_that_has_the_file(self):
+        (self.root / "Public").mkdir()
+        config = self.root / "someone" / ".config" / "opencode" / "opencode.jsonc"
+        config.parent.mkdir(parents=True)
+        config.write_text("{}", encoding="utf-8")
+        self.assertEqual(buddy_sync.windows_opencode_config(), config)
+        self.assertIn(("opencode (Windows)", config, True), buddy_sync.targets())
+
+    def test_nothing_found_skips_the_target(self):
+        (self.root / "someone").mkdir()
+        self.assertIsNone(buddy_sync.windows_opencode_config())
+        self.assertNotIn("opencode (Windows)", [label for label, _, _ in buddy_sync.targets()])
+
+    def test_missing_root_skips_the_target(self):
+        buddy_sync.WINDOWS_USERS_ROOT = self.root / "absent"
+        self.assertIsNone(buddy_sync.windows_opencode_config())
+
+
 if __name__ == "__main__":
     unittest.main()

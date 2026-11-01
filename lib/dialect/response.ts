@@ -1,5 +1,6 @@
 import type { Json } from "../json.ts";
 import { randomUUID } from "node:crypto";
+import { anthropicStopReason, openaiFinishReason } from "./stop-reason.ts";
 
 
 
@@ -33,8 +34,7 @@ export function openaiToAnthropicResponse(body: Json, model: string): Json {
       input,
     });
   }
-  const stopReason =
-    choice.finish_reason === "length" ? "max_tokens" : choice.finish_reason === "tool_calls" ? "tool_use" : "end_turn";
+  const stopReason = anthropicStopReason(choice.finish_reason);
   return {
     id: `msg_${randomUUID().replace(/-/g, "").slice(0, 24)}`,
     type: "message",
@@ -86,8 +86,7 @@ export function anthropicToOpenAIResponse(body: Json, model: string): Json {
   const message: Json = { role: "assistant", content: toolCalls.length ? null : text };
   if (reasoning) message.reasoning_content = reasoning;
   if (toolCalls.length) message.tool_calls = toolCalls;
-  const stopReason =
-    body?.stop_reason === "max_tokens" ? "length" : body?.stop_reason === "tool_use" ? "tool_calls" : "stop";
+  const stopReason = openaiFinishReason(body?.stop_reason);
   return {
     id: `chatcmpl-${randomUUID().replace(/-/g, "").slice(0, 24)}`,
     object: "chat.completion",

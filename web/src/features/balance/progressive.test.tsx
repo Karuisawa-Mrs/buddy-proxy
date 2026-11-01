@@ -66,9 +66,12 @@ describe('额度按上游并发拉', () => {
     const client = mockAdminClient({
       GetBalance: (input) => {
         if (input.upstreamId === 'slow') return new Promise<never>(() => {})
-        const ids = input.upstreamId ? [input.upstreamId] : ['fast', 'slow']
+        // 首屏（peek）：快照里还没有数，只有平台名单。
+        if (!input.upstreamId) {
+          return create(GetBalanceResponseSchema, { upstreamIds: ['fast', 'slow'] })
+        }
         return create(GetBalanceResponseSchema, {
-          quotas: ids.map((id) => quotaFor(id, `acc-${id}`)),
+          quotas: [quotaFor(input.upstreamId, `acc-${input.upstreamId}`)],
         })
       },
     })

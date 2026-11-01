@@ -16,11 +16,17 @@
 
 网关地址的来源：`--gateway` > 环境变量 `BUDDY_GATEWAY` > 配置文件
 `~/.config/buddy-helper/config.json`；三个都没有就报错退出（退出码 5）。
+
+读 /health 时带着客户端的 api key（`--api-key` > 环境变量 `ROUTER_API_KEY` >
+`public`）：网关开了 REQUIRE_API_KEY 时，不带有效 key 的 /health 只答
+{"status"}，读不到额度。
 """
 from __future__ import annotations
 
 import argparse
 import datetime
+import json
+import os
 import pathlib
 import sys
 import time
@@ -39,6 +45,8 @@ EXIT_NO_TODO = 2
 EXIT_NO_PLAN = 3
 EXIT_SEND_FAILED = 4
 EXIT_NO_GATEWAY = common.EXIT_NO_GATEWAY
+
+DEFAULT_API_KEY = "public"
 
 # 会话列表里最后那一项：新开一个 pi 会话。
 NEW_SESSION = {"client": "pi", "id": "", "title": "新开一个 pi 会话", "new": True}
@@ -186,10 +194,10 @@ def next_recovery(accounts: list, now_ms: int, grace_ms: int = 0):
     }
 
 
-def read_accounts(gateway: str) -> tuple:
-    """读网关的 /health。返回 (账号列表, 错误信息)。"""
+def read_accounts(gateway: str, api_key: str = DEFAULT_API_KEY) -> tuple:
+    """读网关的 /health（带着 api key）。返回 (账号列表, 错误信息)。"""
     url = f"{gateway}/health"
-    payload, err = common.http_get_json(url)
+    payload, err = common.get_json_with_key(url, api_key)
     if err:
         return [], err
     return parse_health(payload), ""
@@ -436,6 +444,7 @@ def main(argv: list) -> int:
     parser.add_argument("--session", default=None, help="会话编号或 id（给了就不问）")
     parser.add_argument("--gateway", default=None, help="网关地址（优先于 BUDDY_GATEWAY 和配置文件）")
     parser.add_argument("--set-gateway", default=None, metavar="URL", help="把网关地址写进配置文件")
+    parser.add_argument("--api-key", default=os.environ.get("ROUTER_API_KEY", DEFAULT_API_KEY), help="读 /health 用的客户端 api key（默认 public）")
     parser.add_argument("--grace", type=int, default=DEFAULT_GRACE, help=f"额度回来之后多等几秒（默认 {DEFAULT_GRACE}）")
     parser.add_argument("--poll", type=int, default=DEFAULT_POLL, help=f"每隔多久重读一次额度（默认 {DEFAULT_POLL} 秒）")
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT, help=f"客户端最多跑多久（默认 {DEFAULT_TIMEOUT} 秒）")
@@ -469,7 +478,7 @@ def main(argv: list) -> int:
     reader: typing.Callable[[], tuple] | None = None
     if not args.now and not args.at:
         def read_quota():
-            return read_accounts(gateway)
+            return read_accounts(gateway, args.api_key)
 
         reader = read_quota
 

@@ -96,24 +96,37 @@ check(
 section("凭据");
 
 {
+  // 平台下还没有账号：按平台 id 写，会写到一个不存在的账号名下（账号 id 不复用，
+  // 这份凭据就再也没人认领、也删不掉）。所以拒绝，并说清楚先加账号。
+  const result = setProviderKeys("xinghuo", ["k1"]);
+  check("没有账号时不写", !result.ok, result.message);
+  check("说的是先加账号", result.message.includes("先加一个账号"), result.message);
+  check("没有留下凭据", xinghuoInferenceKey("xinghuo") === "", xinghuoInferenceKey("xinghuo"));
+}
+
+const first = addAccount({ platform: "xinghuo" });
+const firstId = first.id ?? "";
+
+{
+  // 有账号了：平台 id 认成这个平台的第一个账号。
   const result = setProviderKeys("xinghuo", ["k1"]);
   check("写成功了", result.ok, result.message);
   check("写进去一段", result.count === 1, String(result.count));
-  check("推理 key 是它", xinghuoInferenceKey("xinghuo") === "k1", xinghuoInferenceKey("xinghuo"));
-  check("状态说有 key", String(xinghuoStatus("xinghuo").detail).includes("API key"), String(xinghuoStatus("xinghuo").detail));
+  check("推理 key 写在那个账号上", xinghuoInferenceKey(firstId) === "k1", xinghuoInferenceKey(firstId));
+  check("状态说有 key", String(xinghuoStatus(firstId).detail).includes("API key"), String(xinghuoStatus(firstId).detail));
 }
 
 section("清掉");
 
 {
-  const result = setProviderKeys("xinghuo", []);
+  const result = setProviderKeys(firstId, []);
   check("写成功了", result.ok, result.message);
   check("写进去零段", result.count === 0, String(result.count));
-  check("推理 key 是空的", xinghuoInferenceKey("xinghuo") === "", xinghuoInferenceKey("xinghuo"));
+  check("推理 key 是空的", xinghuoInferenceKey(firstId) === "", xinghuoInferenceKey(firstId));
   check(
     "状态说没有推理用的 key",
-    String(xinghuoStatus("xinghuo").detail).includes("没有推理用的 API key"),
-    String(xinghuoStatus("xinghuo").detail),
+    String(xinghuoStatus(firstId).detail).includes("没有推理用的 API key"),
+    String(xinghuoStatus(firstId).detail),
   );
 }
 
@@ -165,12 +178,17 @@ section("登录");
 section("控制组");
 
 {
-  const result = setProviderKeys("zcode", ["x"]);
-  check("ZCode 仍然被拒", !result.ok, result.message);
+  // ZCode 下架后不再是平台（只会说「没有这个账号」）；用还在的 Qoder 当对照。
+  const result = setProviderKeys("qoder", ["x"]);
+  check("Qoder 仍然被拒", !result.ok, result.message);
   check("说的是不接受", result.message.includes("不接受"), result.message);
   check("一段都没写", result.count === 0, String(result.count));
 }
 
+// Close the database before removing its directory: on Windows an open
+// file cannot be deleted (EPERM), so the handle has to go first.
+const { closeStore } = await import("../lib/store.ts");
+closeStore();
 fs.rmSync(tmp, { recursive: true, force: true });
 
 console.log("");

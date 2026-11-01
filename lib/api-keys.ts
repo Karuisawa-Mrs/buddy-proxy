@@ -41,12 +41,34 @@ export type KeyStore = Record<string, string>;
 /** Where the agents' keys are kept. */
 const KEYS_ID = "keys:clients";
 
-/** Load the agents' keys, generating one set when there are none. */
+/** Whether the empty key table has been reported (once, not every reload). */
+let warnedEmpty = false;
+
+/**
+ * Load the agents' keys, generating one set on a fresh install.
+ *
+ * "No record" and "an empty table" are not the same. No record is a fresh
+ * install: a pair is generated, as always. An empty table is someone having
+ * cleared the keys: generating a fresh random pair then would silently replace
+ * them with keys nobody has. The table stays empty instead — every request
+ * with a key is refused — and the log says why.
+ */
 export function loadKeys(prefix = "oc-"): KeyStore {
   let keys: KeyStore = {};
   const stored = getSecret<{ keys: KeyStore }>(KEYS_ID);
   if (stored?.keys && typeof stored.keys === "object") {
     keys = stored.keys;
+    if (Object.keys(keys).length === 0) {
+      if (!warnedEmpty) {
+        console.warn(
+          `[INIT] the API key table (${KEYS_ID}) is empty: not generating new keys, ` +
+            "every request is refused while REQUIRE_API_KEY is on. Put the keys back into the table to let the agents in.",
+        );
+        warnedEmpty = true;
+      }
+      return keys;
+    }
+    warnedEmpty = false;
   } else {
     // The file the keys used to live in.
     try {
@@ -73,11 +95,47 @@ export function extractToken(headers: Record<string, unknown>): string {
   return hdr.startsWith("Bearer ") ? hdr.slice(7) : hdr;
 }
 
-/** Returns the key name, or null when a required key is missing/unknown. */
-export function authenticate(headers: Record<string, unknown>, keys: KeyStore): string | null {
+/**
+ * How long the keys read from the store are trusted.
+ *
+ * The keys are checked on every request, and they can change underneath the
+ * running gateway (rotated in the database, or in the fallback file). Reading
+ * them once at startup meant a revoked key kept working until a restart; a
+ * short cache keeps a rotation to a few seconds without a database read per
+ * request.
+ */
+export const KEYS_TTL_MS = 2000;
+
+let cachedKeys: { keys: KeyStore; at: number } | null = null;
+
+/** The agents' keys as of now (at most KEYS_TTL_MS old). */
+export function currentKeys(): KeyStore {
+  const now = Date.now();
+  if (!cachedKeys || now - cachedKeys.at >= KEYS_TTL_MS) cachedKeys = { keys: loadKeys(), at: now };
+  return cachedKeys.keys;
+}
+
+/** sha256 of a string: equal-length inputs for timingSafeEqual. */
+function digest(value: string): Buffer {
+  return crypto.createHash("sha256").update(value, "utf8").digest();
+}
+
+/**
+ * Returns the key name, or null when a required key is missing/unknown.
+ *
+ * The comparison takes the same time whichever key matches and however much of
+ * it does: both sides are hashed to the same length, compared with
+ * timingSafeEqual, and every key is compared — no early return on a match.
+ */
+export function authenticate(headers: Record<string, unknown>, keys: KeyStore = currentKeys()): string | null {
   const tok = extractToken(headers);
   // Public mode (default): accept anything, even a blank token.
   if (!requireApiKey()) return "public";
-  for (const [name, key] of Object.entries(keys)) if (tok === key) return name;
-  return null;
+  const given = digest(tok);
+  let found: string | null = null;
+  for (const [name, key] of Object.entries(keys)) {
+    if (typeof key !== "string" || !key) continue;
+    if (crypto.timingSafeEqual(given, digest(key)) && found === null) found = name;
+  }
+  return found;
 }

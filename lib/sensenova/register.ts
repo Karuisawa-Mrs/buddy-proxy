@@ -49,7 +49,8 @@ function senseNovaQuotas(provider: ProviderRow, snapshot: HealthSnapshot): Quota
   const plan = usage.plan?.name ? `${usage.plan.name}：` : "";
   return [
     {
-      upstreamId: provider.id,
+      // 平台 id；面板那边还会按账号行统一改写一次（lib/admin/quota-status.ts）。
+      upstreamId: provider.platform,
       accountId: provider.id,
       credits: {
         // 平台不报活动积分的总额与已用，只报还剩多少。

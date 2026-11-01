@@ -48,7 +48,8 @@ function internAiQuotas(provider: ProviderRow, snapshot: HealthSnapshot): QuotaV
     balance.rpmLimit > 0 ? `，RPM ${balance.rpmLimit} / TPM ${balance.tpmLimit}` : "";
   return [
     {
-      upstreamId: provider.id,
+      // 平台 id；面板那边还会按账号行统一改写一次（lib/admin/quota-status.ts）。
+      upstreamId: provider.platform,
       accountId: provider.id,
       credits: {
         total,

@@ -28,9 +28,26 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
+/** Preloaded into every gateway this helper starts (a file:// URL: --import wants one on Windows). */
+const NET_GUARD = pathToFileURL(path.join(ROOT, "test", "net-guard.ts")).href;
+
+/**
+ * 把这几个上游基址指到回环上没人听的端口（9 号，discard）。
+ *
+ * 不是默认：默认指过去，测试漏指的真域名请求就成了一个安静的 ECONNREFUSED，
+ * net-guard 看不见，断言也可能空过。需要它的测试显式传进 env，写明「这几个
+ * 上游这个测试不测，连不上是预期的」。
+ */
+const DEAD = "http://127.0.0.1:9";
+export const DEAD_UPSTREAMS: Record<string, string> = {
+  QODER_GLOBAL_OPENAPI_BASE: `${DEAD}/openapi-global`,
+  QODER_CN_OPENAPI_BASE: `${DEAD}/openapi-cn`,
+  MINIMAX_OAUTH_ORIGIN: `${DEAD}/minimax-oauth`,
+  WORKBUDDY_CHAT_BASE: `${DEAD}/workbuddy`,
+};
 
 /** 最多试几个端口。 */
 const MAX_ATTEMPTS = 8;
@@ -79,8 +96,16 @@ export interface Gateway {
   dataDir: string;
   /** 启动期间子进程的输出（失败时打印它）。 */
   log(): string;
-  /** 幂等：SIGTERM → 500ms → SIGKILL，并删掉临时数据目录（只有 helper 自己建的才删）。 */
+  /**
+   * 幂等：SIGTERM → 500ms → SIGKILL，并删掉临时数据目录（只有 helper 自己建的才删）。
+   * 网关日志里有 `[NET-GUARD]` 就打 FAIL，测试进程以 1 退出（见 onExit）。
+   */
   stop(): void;
+  /**
+   * 同 stop()，但等子进程真的退了才返回。调用方自己删数据目录之前用它：
+   * Windows 上子进程还开着 SQLite 时目录删不掉（EPERM）。
+   */
+  stopAndWait(): Promise<void>;
 }
 
 interface GatewayState {
@@ -93,6 +118,8 @@ interface GatewayState {
   /** 子进程的输出。用对象装着，后来的输出也进得来。 */
   output: { text: string };
   stopped: boolean;
+  /** net-guard 拦下的请求已经打过了。 */
+  netGuardReported?: boolean;
 }
 
 /** 起过的网关：退出钩子靠它收尾。 */
@@ -111,6 +138,26 @@ function installHooks(): void {
 /** 进程要走了：把子进程杀掉，别留一个网关在后台跑。 */
 function onExit(): void {
   for (const state of states) cleanupSync(state);
+  // 网关被 net-guard 拦过请求，测试就算失败：被拦的请求在网关里只是一个错，
+  // 回退、重试、吞掉都可能让断言照样绿。process.exit(0) 先写 exitCode 再跑
+  // exit 监听器，这里改成 1 就是最终的退出码。
+  if ([...states].some((state) => reportNetGuard(state))) process.exitCode = 1;
+}
+
+/**
+ * 网关的日志里有没有 net-guard 拦下的请求；有就打出来（每个网关只打一次）。
+ * 测试的失败在退出钩子里定（见 onExit），stop() 不抛：它常在 finally 里，
+ * 抛了会盖住真正的断言失败。
+ */
+function reportNetGuard(state: GatewayState): boolean {
+  const lines = state.output.text.split("\n").filter((line) => line.includes("[NET-GUARD]"));
+  if (lines.length === 0) return false;
+  if (!state.netGuardReported) {
+    state.netGuardReported = true;
+    console.log(`  FAIL 网关向 127.0.0.1 以外发了请求，被 net-guard 拦下（这个测试判失败）：`);
+    for (const line of lines.slice(0, 10)) console.log(`       ${line.trim()}`);
+  }
+  return true;
 }
 
 function onSigint(): void {
@@ -417,6 +464,7 @@ async function terminate(child: ChildProcess): Promise<void> {
 function stopGateway(state: GatewayState): void {
   if (state.stopped) return;
   state.stopped = true;
+  reportNetGuard(state);
   if (exited(state.child)) {
     removeDataDir(state);
     return;
@@ -500,7 +548,10 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     const port = await freePort();
-    const child = spawn(process.execPath, ["router-proxy.ts"], {
+    // test/net-guard.ts rides along: a request to anything but 127.0.0.1 fails
+    // in the gateway, so an upstream base the test forgot to override cannot
+    // reach the real platform.
+    const child = spawn(process.execPath, ["--import", NET_GUARD, "router-proxy.ts"], {
       cwd: ROOT,
       env: {
         ...process.env,
@@ -560,6 +611,12 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
         dataDir,
         log: () => output.text,
         stop: () => stopGateway(state),
+        stopAndWait: async () => {
+          stopGateway(state);
+          await terminate(child);
+          // 子进程退干净了，日志也收全了：再看一遍。
+          reportNetGuard(state);
+        },
       };
     }
 

@@ -313,39 +313,39 @@ console.log("");
 console.log("两个子站的 key");
 
 const dKey = parseDiscoveryKey({
-  id: "ak_01M4YZ2TJVMFCQAVWXD9956GXX",
+  id: "ak_test0000000000000000000001",
   name: "pi",
-  masked_key: "sk-...9b42",
+  masked_key: "sk-...t002",
   status: "active",
   created_at: "2026-10-15T05:03:14.011Z",
   last_used_at: "2026-10-22T08:20:37.611Z",
 });
-check("Discovery key 的 id 读到了", dKey.id === "ak_01M4YZ2TJVMFCQAVWXD9956GXX");
+check("Discovery key 的 id 读到了", dKey.id === "ak_test0000000000000000000001");
 check("Discovery key 的名字读到了", dKey.name === "pi");
-check("Discovery key 的掩码读到了", dKey.maskedKey === "sk-...9b42");
+check("Discovery key 的掩码读到了", dKey.maskedKey === "sk-...t002");
 check("Discovery key 的状态读到了", dKey.status === "active");
 check("Discovery key 的时间读到了", dKey.createdAt === "2026-10-15T05:03:14.011Z");
 check("列表里没有完整的 key", dKey.plainKey === undefined);
 const createdKey = parseDiscoveryKey({
-  id: "ak_01M5HBMBKQSBGMXJXB1VVCQPGS",
+  id: "ak_test0000000000000000000002",
   name: "buddy-proxy",
-  key: "sk-fullvalue",
-  masked_key: "sk-...369c",
+  key: "sk-test-001",
+  masked_key: "sk-...t001",
   status: "active",
 });
-check("创建的回答里带着完整的 key", createdKey.plainKey === "sk-fullvalue");
-check("创建的回答里 id 也在", createdKey.id === "ak_01M5HBMBKQSBGMXJXB1VVCQPGS");
+check("创建的回答里带着完整的 key", createdKey.plainKey === "sk-test-001");
+check("创建的回答里 id 也在", createdKey.id === "ak_test0000000000000000000002");
 
 // Chat：列表里的 token 是掩过的，创建的那次是完整的
 const cToken = parseChatToken({
-  id: "dnwpi4yU81H6ivgnK0COOYpPQh1Z89ONciSGUKmgFFA=",
+  id: "ZmFrZS1jaGF0LXRva2VuLWlkLWZvci10ZXN0cy0wMDAx",
   token: "sk...aaaa",
   auth_status: 1,
   token_name: "buddy-proxy",
   created_at: "2026-10-22T08:28:51.494Z",
   expired_at: "-",
 });
-check("Chat token 的 id 读到了", cToken.id.startsWith("dnwpi4yU81H6"));
+check("Chat token 的 id 读到了", cToken.id.startsWith("ZmFrZS1jaGF0"));
 check("Chat token 的名字读到了", cToken.name === "buddy-proxy");
 check("Chat token 的掩码是平台给的", cToken.maskedToken === "sk...aaaa");
 check("Chat token 的权限是数字", cToken.authStatus === 1);

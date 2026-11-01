@@ -127,6 +127,39 @@ def http_get_json(url: str, timeout: int = 15):
         return None, f"{url} 返回的不是 JSON：{exc}"
 
 
+def get_json_with_key(url: str, api_key: str, timeout: int = 15):
+    """GET 一个 JSON，带着客户端的 api key。返回 (数据, 错误信息)。
+
+    跟 http_get_json 一样走 http.client（不吃 HTTP_PROXY），只多一个
+    Authorization 头：网关开了 REQUIRE_API_KEY 时，/health 不带 key 只答
+    {"status"}，/v1/models 不带 key 是 401。public 模式下网关不看这个头。
+    """
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        return None, f"{url} 不是 http(s) 地址"
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    target = parts.path or "/"
+    if parts.query:
+        target += "?" + parts.query
+    connection = http.client.HTTPSConnection if parts.scheme == "https" else http.client.HTTPConnection
+    client = connection(parts.hostname, port, timeout=timeout)
+    try:
+        client.request("GET", target, headers={"Authorization": f"Bearer {api_key}"} if api_key else {})
+        response = client.getresponse()
+        status = response.status
+        body = response.read().decode("utf-8", errors="replace")
+    except Exception as exc:  # 网关没起、网络不通
+        return None, f"{url} 拉不到：{exc}"
+    finally:
+        client.close()
+    if status == 401:
+        return None, f"{url} 拒绝了 api key（401）：用 --api-key 或 ROUTER_API_KEY 给一个网关认的 key"
+    try:
+        return json.loads(body), ""
+    except ValueError as exc:
+        return None, f"{url} 返回的不是 JSON：{exc}"
+
+
 # ------------------------------------------------------------------ 会话
 
 

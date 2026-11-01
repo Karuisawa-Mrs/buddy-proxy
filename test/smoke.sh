@@ -16,19 +16,18 @@ cd "$ROOT"
 # numbers that are not there any more. The gateway now makes its own temporary
 # one (test/serve.ts), so there is nothing here to clean up.
 FIXTURES="$ROOT/test/fixtures"
-mkdir -p /tmp/opencode
 
 if [ ! -d "$FIXTURES" ] || [ -z "$(ls -A "$FIXTURES" 2>/dev/null)" ]; then
   echo "no fixtures yet — run test/capture.sh first"
   exit 1
 fi
 
-# The relay station needs an account and a key; without them it stays off.
-# The upstream switch lives in the database now, so the test turns it on there
-# (test/fake-sessions.ts does it) instead of through an environment variable.
-# The matrix in e2e.sh tests the relay station too, so it has to be skipped
-# there as well when there is no key to test it with.
-if grep -q TOKEN_RHYTHM_1_API_KEY .env 2>/dev/null; then
+# The relay station is tested whenever its answers were recorded: the mock
+# replays them, so no real key is needed (test/fake-sessions.ts writes a fake
+# one into the test's own database). Whether .env holds a key says nothing
+# about an offline run, and reading .env here would be the only place the
+# test suite touched it.
+if ls "$FIXTURES"/post-tokenrhythm-* >/dev/null 2>&1; then
   export TEST_UPSTREAMS="qoder,qoder-cn,workbuddy-cn,minimax,tokenrhythm"
 else
   export TEST_UPSTREAMS="qoder,qoder-cn,workbuddy-cn,minimax"
@@ -44,8 +43,14 @@ mkdir -p "$LOG_DIR"
 
 # 网关与假上游都交给 test/serve.ts 起：端口由共享 helper 挑（撞了就换号重来），
 # 起来之后它把基址写进 ready 文件；收尾时它自己把网关与假上游都收掉。
-READY="$(mktemp -d)/ready.json"
-node --experimental-strip-types test/serve.ts --mock --ready-file "$READY" \
+#
+# The ready file sits under the log directory for the same reason as the logs:
+# `mktemp -d` answers "/tmp/...", which bash maps to %TEMP% but Node (with
+# MSYS path conversion off) maps to the root of the current drive, so the two
+# would never see the same file.
+READY="$LOG_DIR/ready.json"
+rm -f "$READY"
+node --import ./test/net-guard.ts --experimental-strip-types test/serve.ts --mock --ready-file "$READY" \
   --env "TEST_UPSTREAMS=$TEST_UPSTREAMS" \
   --log-file "$LOG_DIR/smoke-router.log" > "$LOG_DIR/smoke-serve.log" 2>&1 &
 ROUTER_PID=$!
@@ -80,7 +85,7 @@ status=$?
 # The settings layer is checked on its own: the order the three sources are
 # read in is what decides how the service behaves.
 echo ""
-node --experimental-strip-types test/config-check.ts
+node --import ./test/net-guard.ts --experimental-strip-types test/config-check.ts
 config_status=$?
 if [ $config_status -ne 0 ]; then
   status=$config_status
@@ -89,7 +94,7 @@ fi
 # The parts of the WorkBuddy client that were changed to match the official
 # one are checked on their own too.
 echo ""
-node --experimental-strip-types test/workbuddy-check.ts
+node --import ./test/net-guard.ts --experimental-strip-types test/workbuddy-check.ts
 wb_status=$?
 if [ $wb_status -ne 0 ]; then
   status=$wb_status
@@ -99,7 +104,7 @@ fi
 # a request, the credits and the state. Against a fake upstream — no credits
 # are spent.
 echo ""
-node --experimental-strip-types test/sensenova-intern-ai-check.ts
+node --import ./test/net-guard.ts --experimental-strip-types test/sensenova-intern-ai-check.ts
 sn_status=$?
 if [ $sn_status -ne 0 ]; then
   status=$sn_status

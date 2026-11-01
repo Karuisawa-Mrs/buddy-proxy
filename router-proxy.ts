@@ -18,7 +18,7 @@
 //   Anthropic → Qoder  converted to Anthropic on the way in
 //   Anthropic → MiniMax passes through
 
-import { configNumber, configString, logConfig } from "./lib/config.ts";
+import { configFlag, configNumber, configString, logConfig } from "./lib/config.ts";
 import { deleteSecret, listSecrets } from "./lib/store.ts";
 import { requireApiKey } from "./lib/api-keys.ts";
 import { PLATFORMS, platformPolicy } from "./lib/platforms.ts";
@@ -71,10 +71,12 @@ const server = app.listen(PORT, HOST, () => {
   // The panel's token: generated once, kept in the data directory. The
   // operator reads it from the file and hands it to the panel.
   adminToken();
-  // The usage log grows one row per request, so old rows go. Ninety days is
-  // enough for "today" and the monthly view.
-  const pruned = pruneUsage(configNumber("USAGE_RETENTION_DAYS", 30));
-  if (pruned > 0) console.log(`  [USAGE] 丢掉了 ${pruned} 条超过 90 天的用量记录`);
+  // The usage log grows one row per request, so old rows go. Thirty days (the
+  // default, the panel can change it) is enough for "today" and the monthly
+  // view; the log says the number actually in use.
+  const retentionDays = configNumber("USAGE_RETENTION_DAYS", 30);
+  const pruned = pruneUsage(retentionDays);
+  if (pruned > 0) console.log(`  [USAGE] 丢掉了 ${pruned} 条超过 ${retentionDays} 天的用量记录`);
   console.log("");
   console.log(`  router listening on ${base}`);
   console.log(`    Anthropic  ${base}/v1/messages`);
@@ -96,6 +98,7 @@ const server = app.listen(PORT, HOST, () => {
   }
   console.log(`  auth: ${requireApiKey() ? "api key required" : "public"}`);
   console.log("");
+  warnIfOpenDoor();
 
   // Where the settings came from: the database first, then the environment,
   // then the defaults in the code. A setting that is not the default is
@@ -106,6 +109,46 @@ const server = app.listen(PORT, HOST, () => {
   startUpstreams();
   void PING_MS;
 });
+
+/**
+ * Public mode on an address other machines can reach: say so, loudly.
+ *
+ * Public mode is the default because the agents that point here today send no
+ * key, and turning the door on would lock them all out. That is fine on a
+ * loopback address (or behind a port bound to one, as the compose file does),
+ * and not fine anywhere else: whoever reaches the port spends the accounts'
+ * quota and reads /health. The start goes on; the operator has to see it.
+ */
+function warnIfOpenDoor(): void {
+  if (requireApiKey() || isLoopback(HOST)) return;
+  // In a container the gateway always listens on 0.0.0.0; what decides who
+  // reaches it is the port the host publishes. The deployment says it bound
+  // that port to loopback, so one line is enough — an error on every start of
+  // a correct deployment just teaches people to ignore it.
+  if (configFlag("ROUTER_PUBLISH_LOOPBACK_ONLY", false)) {
+    console.log(
+      `[INIT] public mode on ${HOST}:${PORT}; ROUTER_PUBLISH_LOOPBACK_ONLY says the host publishes the port on loopback only`,
+    );
+    return;
+  }
+  const lines = [
+    "!!! ============================================================ !!!",
+    `!!! 前门是开着的：REQUIRE_API_KEY=false，而且监听在 ${HOST}:${PORT}`,
+    "!!! 能连到这个端口的任何人都能用这些账号的额度、读 /health 里的账号明细。",
+    "!!! 如果端口只绑在宿主机回环上（docker-compose.yml 的 127.0.0.1:6450），可以不管。",
+    "!!! 否则：把 REQUIRE_API_KEY 设成 true（面板「设置」或环境变量），",
+    "!!!       并给 Agent 配上 keys:clients 里的 key；或者把 ROUTER_HOST 设成 127.0.0.1。",
+    "!!! ============================================================ !!!",
+  ];
+  for (const line of lines) console.error(line);
+  console.error("");
+}
+
+/** Is this listen address reachable from this machine only? */
+function isLoopback(host: string): boolean {
+  const h = host.trim().toLowerCase().replace(/^\[|\]$/g, "");
+  return h === "localhost" || h === "::1" || /^127\./.test(h);
+}
 
 /**
  * Keep the idle connections longer than the clients do.

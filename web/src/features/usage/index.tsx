@@ -18,10 +18,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Button } from '@/components/ui/button'
 import { useUsageSummary } from '@/features/overview/api'
 import { useUpstreams } from '@/features/upstreams/api'
 import { useUsageEvents } from '@/features/usage/api'
 import { UsageTable } from '@/features/usage/usage-table'
+import { USAGE_WINDOWS } from '@/features/usage/windows'
 import { type NavigateFn } from '@/hooks/use-table-url-state'
 import { formatCompact, formatCount } from '@/lib/format'
 
@@ -31,16 +33,8 @@ const route = getRouteApi('/_authenticated/usage')
 // 翻页在这一段里切。
 const EVENTS_LIMIT = 500
 
-// 时间窗。契约里的取值：hour / day / week / month，空表示全部。
-// today 是从本地零点算起的一段 —— 早上八点看「今天」，要的是零点到现在。
-const WINDOWS = [
-  { value: 'today', label: '今日' },
-  { value: 'hour', label: '最近一小时' },
-  { value: 'day', label: '最近一天' },
-  { value: 'week', label: '最近一周' },
-  { value: 'month', label: '最近一个月' },
-  { value: 'all', label: '全部' },
-]
+// 时间窗的几档与路由的白名单是同一份（features/usage/windows.ts）。
+const WINDOWS = USAGE_WINDOWS
 
 export function UsagePage() {
   const search = route.useSearch()
@@ -182,6 +176,28 @@ export function UsagePage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
+          {/* 下拉的选项没取到：别让它悄悄只剩「全部」，说清楚并给重试。 */}
+          {upstreams.isError || summary.isError ? (
+            <div
+              role='alert'
+              className='mb-3 flex flex-wrap items-center gap-3 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2'
+            >
+              <p className='text-sm text-destructive'>
+                {upstreams.isError ? 'Provider 列表加载失败' : '模型列表加载失败'}
+                ，筛选下拉里暂时只有「全部」
+              </p>
+              <Button
+                variant='outline'
+                size='sm'
+                onClick={() => {
+                  if (upstreams.isError) void upstreams.refetch()
+                  if (summary.isError) void summary.refetch()
+                }}
+              >
+                重试
+              </Button>
+            </div>
+          ) : null}
           <UsageTable
             data={events.data?.events ?? []}
             isPending={events.isPending}

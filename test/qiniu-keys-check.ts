@@ -85,12 +85,17 @@ console.log("");
 console.log("别的平台不放开");
 
 {
-  const result = setProviderKeys("zcode", ["x"]);
+  // ZCode 下架后不再是平台（只会说「没有这个账号」）；用还在的 Qoder 当对照。
+  const result = setProviderKeys("qoder", ["x"]);
   check("被拒了", !result.ok, result.message);
   check("说的是不接受", result.message.includes("不接受"), result.message);
   check("一段都没写", result.count === 0, String(result.count));
 }
 
+// Close the database before removing its directory: on Windows an open
+// file cannot be deleted (EPERM), so the handle has to go first.
+const { closeStore } = await import("../lib/store.ts");
+closeStore();
 fs.rmSync(tmp, { recursive: true, force: true });
 
 console.log("");

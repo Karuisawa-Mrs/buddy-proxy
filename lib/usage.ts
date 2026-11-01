@@ -303,9 +303,10 @@ export function maxTotals(a: TokenTotals | null, b: TokenTotals): TokenTotals {
 /**
  * 丢掉太老的记录。
  *
- * 表是每条请求一行，不删就会一直长。默认留 90 天。
+ * 表是每条请求一行，不删就会一直长。默认留 30 天 —— 跟设置
+ * USAGE_RETENTION_DAYS 的默认值一致，调用方一般传的就是那个设置。
  */
-export function pruneUsage(keepDays = 90): number {
+export function pruneUsage(keepDays = 30): number {
   ensureTable();
   const cutoff = Date.now() - keepDays * 24 * 60 * 60 * 1000;
   const result = store().prepare("DELETE FROM usage_event WHERE ts < ?").run(cutoff);

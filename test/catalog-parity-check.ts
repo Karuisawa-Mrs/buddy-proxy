@@ -16,15 +16,16 @@
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { startGateway as startHarness, type Gateway as HarnessGateway } from "./harness.ts";
+import { DEAD_UPSTREAMS, startGateway as startHarness, type Gateway as HarnessGateway } from "./harness.ts";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url)) + "/..";
-const DATA_DIR = "/tmp/opencode/test-catalog-parity";
+// 临时目录走系统的 tmpdir：写死的 /tmp 在 Windows 上落到当前盘的根上，
+// 而且两次运行会撞在同一个目录上。
+const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "test-catalog-parity-"));
 
-fs.rmSync(DATA_DIR, { recursive: true, force: true });
-fs.mkdirSync(DATA_DIR, { recursive: true });
 
 // The router wants a credential for every upstream it serves: without one it
 // starts the device flow, which opens a browser and asks qoder.com for a
@@ -58,7 +59,8 @@ function check(name: string, ok: unknown, detail = ""): void {
 const gw: HarnessGateway = await startHarness({
   dataDir: DATA_DIR,
   cleanupDataDir: true,
-  env: { BENEFITS_DISABLED: "1" },
+  // 这个测试只比目录：平台的登录态、套餐接口不测，指到回环的死端口（连不上是预期）。
+  env: { BENEFITS_DISABLED: "1", ...DEAD_UPSTREAMS },
 });
 const BASE = gw.base;
 /** helper 收集的子进程输出。 */

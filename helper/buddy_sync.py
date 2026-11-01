@@ -11,7 +11,8 @@
 命令行：
   --gateway URL    网关地址（优先于 BUDDY_GATEWAY 和配置文件）
   --set-gateway URL  把网关地址写进 ~/.config/buddy-helper/config.json
-  --api-key KEY    客户端 api key，默认 public（网关跑 public 模式时不校验 key）
+  --api-key KEY    客户端 api key（也读 ROUTER_API_KEY），默认 public。写进客户端配置，
+                   读 /health 与 /v1/models 时也带着它（网关开了 REQUIRE_API_KEY 就要对的 key）
   --providers      同时同步各上游分组的 provider（默认不同步）
   --dry-run        只打印要改什么，不写文件
   --check          只比对不写：一致退出码 0，有差异退出码 1
@@ -130,12 +131,13 @@ def fetch_providers(gateway: str) -> tuple:
     返回 (清单, 错误信息)。清单是 [(唯一 id, 显示名)] —— 唯一 id 是路径里
     那一段，也是客户端里那个 provider 的名字；显示名是面板上用户给它起的。
 
-    清单从 /health 拿：那个接口是公开的（面板自己的令牌只管面板），里面
-    已经带了每个 provider 的这两个值。用户自己在面板上加的 provider 也在
+    清单从 /health 拿，里面已经带了每个 provider 的这两个值。public 模式下
+    /health 是公开的；网关开了 REQUIRE_API_KEY 时，不带有效 key 只答
+    {"status"}，所以这里带着 API_KEY 去问。用户自己在面板上加的 provider 也在
     里面 —— 写死一份表就会漏掉新的。
     """
     url = f"{gateway}/health"
-    data, err = common.http_get_json(url)
+    data, err = common.get_json_with_key(url, API_KEY)
     if err:
         return [], err
     if not isinstance(data, dict):
@@ -163,7 +165,7 @@ def fetch_models(gateway: str, base_path: str) -> tuple:
     比写空更麻烦。
     """
     url = f"{gateway}{base_path}/v1/models"
-    data, err = common.http_get_json(url)
+    data, err = common.get_json_with_key(url, API_KEY)
     if err:
         return None, err
     if not isinstance(data, dict):

@@ -34,6 +34,7 @@ import { poolUsage as senseNovaPoolUsage } from "../sensenova/quota.ts";
 import { loadSession as loadInternAiSession, tokenFor as internAiTokenFor } from "../intern-ai/auth.ts";
 import { balance as internAiBalance, creditPacks as internAiCreditPacks } from "../intern-ai/quota.ts";
 import { qiniuQuotaOf } from "../qiniu/quota.ts";
+import { qiniuPortalCookie } from "../qiniu/account.ts";
 import { clearHealthSnapshot, peekHealthSnapshot, putHealthSnapshot } from "../health-cache.ts";
 import {
   accountsOfPlatform,
@@ -64,6 +65,7 @@ import { loginActivity } from "./login.ts";
 import { coolingOf, coolingAccounts, platformCooling, type CoolingInfo, type PlatformCooling } from "./upstream-state.ts";
 import { policyEnum } from "./policy.ts";
 import { type CatalogGroup } from "../router/catalog.ts";
+import { forgetAccountQuota, panelQuotas, recordAccountQuota, withPlatform, type PanelQuota } from "./quota-status.ts";
 
 /** 上游的 id。现在有两种：平台 id（面板上的那一行），与账号行的 id。 */
 /** A provider's id. The kind is not part of it: the table has the kind. */
@@ -491,8 +493,14 @@ export async function refreshHealthSnapshot(): Promise<void> {
   healthRefreshedAt = Date.now();
 }
 
-/** 问一家上游，把它那段填进快照。 */
-async function refreshOne(snapshot: HealthSnapshot, row: ProviderRow): Promise<void> {
+/**
+ * 问一家上游，把它那段填进快照。
+ *
+ * 回答「这一家真去问了没有」：没有取数路子的 kind（星火）、缺了取数凭据的
+ * 账号（七牛没有门户 cookie）回 false —— 它们这一轮没数是本来就没有，不是
+ * 上游没答。
+ */
+async function refreshOne(snapshot: HealthSnapshot, row: ProviderRow): Promise<boolean> {
   switch (row.kind) {
     case "qoder": {
       let account: unknown;
@@ -502,7 +510,7 @@ async function refreshOne(snapshot: HealthSnapshot, row: ProviderRow): Promise<v
         account = { region: row.region, usable: false, reason: (e as Error)?.message };
       }
       snapshot.qoder[row.id] = { account, credits: await fetchQoderCredits(row.id) };
-      return;
+      return true;
     }
     case "minimax": {
       // 明细与判定值同源：一次扫描只发一次 credit/details
@@ -514,33 +522,41 @@ async function refreshOne(snapshot: HealthSnapshot, row: ProviderRow): Promise<v
         points: { amount: ledger.points, at: Date.now() },
         creditFallbackEnabled: await miniMaxCreditFallback(row.id),
       };
-      return;
+      return true;
     }
     case "zcode":
       snapshot.zcode[row.id] = { quota: await zcodeQuota(300_000, row.id) };
-      return;
+      return true;
     case "workbuddy":
       // 签到状态与积分账本是两件事：一个是连签，一个是平台自己的余额。
       snapshot.workbuddy[row.id] = {
         credits: await fetchWorkBuddyCredits(row.id),
         resources: await fetchWorkBuddyResources(row.id),
       } as WorkBuddySnapshotEntry;
-      return;
+      return true;
     case "tokenrhythm":
       // 一个账号一行一个钱包：快照也按账号存。
       snapshot.tokenrhythm[row.id] = { tenants: await tokenRhythmStatuses(row.id) };
-      return;
+      return true;
     case "sensenova":
       snapshot.sensenova[row.id] = { pools: await senseNovaPools(row.id) };
-      return;
+      return true;
     case "intern-ai":
       snapshot.internAi[row.id] = await internAiCredits(row.id);
-      return;
+      return true;
     case "qiniu":
       // 额度在门户上，只认 cookie：没有 cookie 就是「不知道」，不是「没有钱」。
       snapshot.qiniu[row.id] = { quota: await qiniuQuotaOf(row.id) };
-      return;
+      return Boolean(qiniuPortalCookie(row.id));
   }
+  return false;
+}
+
+/** 账号开着、凭据能用：这样的账号问过一轮还没数，就是上游没给。 */
+function quotaExpected(row: ProviderRow): boolean {
+  if (!row.enabled) return false;
+  const view = safeCredential(row);
+  return Boolean(view && hasUsableCredential(view.status));
 }
 
 /**
@@ -556,9 +572,16 @@ async function refreshPlatformRows(rows: ProviderRow[]): Promise<HealthSnapshot>
   await Promise.allSettled(
     rows.map(async (row) => {
       try {
-        await refreshOne(partial, row);
+        const asked = await refreshOne(partial, row);
+        // 面板那份：问到了就记新数，没问到就记一句「没问到」，旧数留着给面板标旧。
+        // 取数函数失败时多半只记日志、回 null（不抛）：该有数的账号静默空了
+        // 也要记一条，不然它在额度页上就这么没了。
+        const views = kindOf(row.kind)?.quotas(row, partial) ?? [];
+        recordAccountQuota(row.id, views, undefined, asked && quotaExpected(row));
       } catch (e) {
-        console.warn(`[HEALTH] ${row.id} 的额度没问到：${(e as Error)?.message}`);
+        const message = (e as Error)?.message || String(e);
+        console.warn(`[HEALTH] ${row.id} 的额度没问到：${message}`);
+        recordAccountQuota(row.id, [], message);
       }
     }),
   );
@@ -754,20 +777,29 @@ function safeCredential(row: ProviderRow): CredentialView | null {
  *
  * `fresh` 的时候先问一遍平台：面板要看现数时才用，不然就用缓存里的。
  */
-export async function upstreamQuotas(id: string, fresh = false, force = false): Promise<QuotaView[]> {
+export async function upstreamQuotas(id: string, fresh = false, force = false): Promise<PanelQuota[]> {
   const rows = accountsFor(id);
   if (!rows.length) return [];
   const snapshot = fresh
     ? await freshPlatformSnapshot(id, force)
     : peekHealthSnapshot<HealthSnapshot>()?.data ?? null;
-  if (!snapshot) return [];
-  const out: QuotaView[] = [];
+  const out: PanelQuota[] = [];
   for (const row of rows) {
     const kind = kindOf(row.kind);
     if (!kind) continue;
-    out.push(...kind.quotas(row, snapshot));
+    // 快照里没数的账号也要过一遍：它上一轮没问到的话，面板要看见一张错误卡。
+    out.push(...panelQuotas(row, snapshot ? kind.quotas(row, snapshot) : []));
   }
   return out;
+}
+
+/** 名下有账号的平台 id，按账号表的次序。额度页据此知道要问哪几家。 */
+export function quotaPlatformIds(): string[] {
+  const ids: string[] = [];
+  for (const row of listProviders()) {
+    if (!ids.includes(row.platform)) ids.push(row.platform);
+  }
+  return ids;
 }
 
 /**
@@ -815,6 +847,9 @@ export function mergeQuotas(quotas: QuotaView[]): QuotaView | null {
  * 就不该再有关于它的话。
  */
 export function forgetAccountSnapshot(accountId: string): void {
+  // 面板记着的那份旧数与错误也是它的痕迹。它和快照是两份账，快照还没
+  // 生成（刚启动、从没取过数）时也得清，所以放在 early return 之前。
+  forgetAccountQuota(accountId);
   const snapshot = peekHealthSnapshot<HealthSnapshot>()?.data;
   if (!snapshot) return;
   // 快照的每个桶都是「账号 id → 那一份」。摊成一张表就能按账号 id 找。
@@ -858,7 +893,7 @@ function upstreamQuotasCached(id: string): QuotaView[] {
   for (const row of accountsFor(id)) {
     const kind = kindOf(row.kind);
     if (!kind) continue;
-    out.push(...kind.quotas(row, snapshot));
+    out.push(...kind.quotas(row, snapshot).map((view) => withPlatform(view, row)));
   }
   return out;
 }

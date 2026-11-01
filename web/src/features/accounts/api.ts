@@ -65,11 +65,25 @@ export function useSetProviderKeys() {
   const client = useAdminClient()
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async (input: { accountId: string; keys: string[] }) => {
+    mutationFn: async (input: {
+      accountId: string
+      /** 一行一把 key 的那种（按位置整段覆盖）。 */
+      keys?: string[]
+      /** 按段写：没给的段不改。 */
+      apiKey?: string
+      portalCookie?: string
+      /** 清掉这个账号的全部 key。 */
+      clear?: boolean
+    }) => {
       const result = await client.setProviderKeys(
         create(SetProviderKeysRequestSchema, {
           upstreamId: input.accountId,
-          keys: input.keys,
+          keys: input.keys ?? [],
+          ...(input.apiKey !== undefined ? { apiKey: input.apiKey } : {}),
+          ...(input.portalCookie !== undefined
+            ? { portalCookie: input.portalCookie }
+            : {}),
+          clear: input.clear === true,
         })
       )
       assertOk(result, '写入失败')

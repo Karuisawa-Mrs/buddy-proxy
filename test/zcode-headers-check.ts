@@ -60,7 +60,7 @@ const OFFICIAL = [
 ];
 
 /** 官方桌面端的会话 id 形状。 */
-const SESSION_ID = "session_37e3b015e79c2c05045cacd79a105500";
+const SESSION_ID = "session_00000000000000000000000000000001";
 
 console.log("");
 console.log("模型请求的头：就是官方那套");

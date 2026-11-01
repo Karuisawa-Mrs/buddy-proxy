@@ -43,8 +43,9 @@ import { useBenefitStatus, useRunBenefitNow } from '@/features/upstreams/benefit
 import { BenefitsPanel } from '@/features/upstreams/benefits-panel'
 import { ProviderAccounts } from '@/features/upstreams/provider-accounts'
 import { ProviderPolicySelect } from '@/features/upstreams/provider-policy'
+import { KindsErrorNotice } from '@/features/upstreams/kinds-error'
 import { ProviderKeysDialog } from '@/features/accounts/provider-keys-dialog'
-import { useSetProviderKeys } from '@/features/accounts/api'
+import { useCredentials, useSetProviderKeys } from '@/features/accounts/api'
 import { formatLocalMoment } from '@/lib/format'
 import { useAccountLogin } from '@/features/login/use-account-login'
 import { LoginDialog } from '@/features/login/login-dialog'
@@ -85,6 +86,8 @@ export function UpstreamsPage() {
   const [deleteTarget, setDeleteTarget] = useState<Account | null>(null)
   /** 正在填 key 的账号 id。 */
   const [keysFor, setKeysFor] = useState<string | null>(null)
+  // 填 key 的弹窗要知道账号上已经有哪几段（掩码），没开弹窗时不取。
+  const keyCredentials = useCredentials(keysFor ?? '')
   /** 刚才那次签到的结果：签到是全局的，结果留在页面上，换个平台也还在。 */
   const [runResult, setRunResult] = useState<RunBenefitNowResponse | null>(null)
   // 签到状态是所有账号一份的：展开了才去取，没展开不费那个请求。
@@ -265,6 +268,9 @@ export function UpstreamsPage() {
                                 }
                                 onRetry={() => void benefits.refetch()}
                               />
+                              {kinds.isError ? (
+                                <KindsErrorNotice onRetry={() => void kinds.refetch()} />
+                              ) : null}
                               <ProviderAccounts
                                 platform={upstream.id}
                                 kind={upstream.kind}
@@ -368,17 +374,36 @@ export function UpstreamsPage() {
         onOpenChange={(open) => {
           if (!open) setKeysFor(null)
         }}
-        existing={[]}
+        // 账号上的凭据不只是 key（会话、登录行也在这张表里）：弹窗只讲 key 与
+        // cookie，别的混进来会把「现在有 N 把」数错，也会让「清除」看着有东西可清。
+        existing={(keyCredentials.data?.credentials ?? [])
+          .filter((row) => row.kind === 'api_key' || row.kind === 'cookie')
+          .map((row) => ({
+            kind: row.kind,
+            masked: row.masked,
+          }))}
         pending={setKeys.isPending}
-        onSubmit={(keys) => {
+        onSubmit={(input) => {
           if (!keysTarget) return
           setKeys.mutate(
-            { accountId: keysTarget.account.id, keys },
+            { accountId: keysTarget.account.id, ...input },
             {
               onSuccess: () => setKeysFor(null),
             }
           )
         }}
+        // 「清除凭据」只给按段写的两家（七牛、星火）：后端的 clear 只认它们，
+        // 别家点了也清不掉。
+        onClear={
+          keysTarget?.kind === 'qiniu' || keysTarget?.kind === 'xinghuo'
+            ? () => {
+                setKeys.mutate(
+                  { accountId: keysTarget.account.id, clear: true },
+                  { onSuccess: () => setKeysFor(null) }
+                )
+              }
+            : undefined
+        }
       />
 
       {/* 注销要确认：这一行删掉就没了，凭据也跟着删。 */}

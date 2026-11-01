@@ -32,3 +32,16 @@ mise.local.toml
 # Python
 __pycache__/
 *.pyc
+
+# 运行时数据与测试的临时产物：库、令牌、日志都不进仓库。
+data/
+admin-token
+*.db
+*.db-wal
+*.db-shm
+test/.smoke-logs/
+test/.tmp/
+
+# 第三方技能（上游无许可证），本机自己装，见 .pi/README.md。
+.agents/skills/hello-js-reverse-skill/
+.pi/agents/js-reverse.md

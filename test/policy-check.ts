@@ -207,6 +207,8 @@ function tenant(
 ): any {
   return {
     index,
+    // 状态里带着账号 id：选账号时要回头看账号行的开关（停用的不接请求）。
+    accountId: `tokenrhythm-${index}`,
     account: `190***${index}`,
     name: `租户 ${index}`,
     hasKey: true,
@@ -527,6 +529,10 @@ console.log("日志里说得清");
   check("业务码也在日志里", describeUpstreamError(wrapped).includes("2067"), describeUpstreamError(wrapped));
 }
 
+// Close the database before removing its directory: on Windows an open
+// file cannot be deleted (EPERM), so the handle has to go first.
+const { closeStore } = await import("../lib/store.ts");
+closeStore();
 fs.rmSync(tmp, { recursive: true, force: true });
 
 console.log("");

@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { UsagePage } from '@/features/usage'
+import { usageWindowOf } from '@/features/usage/windows'
 
 /**
  * 用量页面的筛选和分页都写在 URL 里：刷新和分享链接都保得住状态。
@@ -18,11 +19,9 @@ export const Route = createFileRoute('/_authenticated/usage')({
       search.model === undefined || search.model === null
         ? undefined
         : String(search.model),
-    // 时间窗：hour / day / week / month，空表示全部。
-    window:
-      search.window === undefined || search.window === null
-        ? undefined
-        : String(search.window),
+    // 时间窗：只认下拉里有的那几档。手改出来的值（或旧链接里的）落回默认，
+    // 不然下拉显示空白，后端也按一个不认识的窗口去算。
+    window: usageWindowOf(search.window),
   }),
   component: UsagePage,
 })

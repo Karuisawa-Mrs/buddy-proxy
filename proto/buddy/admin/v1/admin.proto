@@ -155,6 +155,14 @@ message UpstreamQuota {
   CreditSummary credits = 4;
   // 套餐额度（按窗口的百分比）。
   TokenPlan token_plan = 5;
+  // 这一轮没问到这个账号的额度时，为什么没问到。空表示问到了（或者还没问过）。
+  //
+  // 有 error 时，上面三样是上一次问到的旧数（stale 为真）；一次也没问到过的
+  // 账号三样都空着，只有这一句 —— 面板照它给这个账号画一张错误卡，而不是让
+  // 账号从额度页上消失。
+  string error = 6;
+  // 上面三样是上一次问到的旧数，不是这一轮的。
+  bool stale = 7;
 }
 
 // 余额：钱。同一平台的多个账号可以合并。
@@ -401,12 +409,27 @@ message RefreshCredentialResponse {
   int32 generation = 3;
 }
 
-// 写一个 Provider 的 API Key 列表。空的 key 会被丢掉。
+// 写一个账号的 API Key。现在收 key 的只有七牛云与讯飞星火。
+//
+// 两种写法：
+//
+//   按段写（api_key / portal_cookie / clear）：没给的段不改，给了空串也不改；
+//     要清掉凭据只能用 clear。面板用这一种。
+//   按位置写（keys）：旧写法，整段覆盖 —— 七牛云第一段是推理 key、第二段是
+//     门户 cookie，星火只看第一段；空串在这里表示清掉那一段，不会被丢掉。
+//
+// 带了任何一个按段的字段，keys 就不看。
 message SetProviderKeysRequest {
-  // 目前只有 minimax-api 需要。
+  // 账号的 id（provider 表那一行），不是平台 id：key 挂在账号上。
   string upstream_id = 1;
-  // 按顺序排：第一把 key 是第一个租户。
+  // 按位置写的那份。见上面。
   repeated string keys = 2;
+  // 推理用的 API key（七牛云、讯飞星火）。没给就不改。
+  optional string api_key = 3;
+  // 七牛云的门户 cookie（只用来查额度）。没给就不改。
+  optional string portal_cookie = 4;
+  // 清掉这个账号的全部 key。为真时别的字段都不看。
+  bool clear = 5;
 }
 
 message SetProviderKeysResponse {
@@ -519,11 +542,19 @@ message GetBalanceRequest {
   //
   // 面板上的「刷新额度」按这一下；平时打开面板不传。
   bool force = 2;
+  // 只读快照，不问上游，也不等正在跑的刷新。
+  //
+  // 额度页的首屏用它：先把已有的数画出来、认出有哪些平台，再按平台各问一趟
+  // （各刷各的），最慢的那个平台不拖整页。与 force 同时给时 peek 赢。
+  bool peek = 3;
 }
 
 message GetBalanceResponse {
   // 每个账号一条。TokenRhythm 一个租户一条，别的上游一条。
   repeated UpstreamQuota quotas = 1;
+  // 名下有账号的平台 id，按账号的先后。只在没指定 upstream_id 时给：快照里
+  // 还没数的平台也在这里，面板据此知道要按哪些平台去问。
+  repeated string upstream_ids = 2;
 }
 
 // ── 用量 ──────────────────────────────────────────────────────────────────
@@ -556,11 +587,16 @@ message GetUsageSummaryResponse {
   // 按发请求的 agent 分组：pi、opencode、dsh……
   repeated UsageBucket by_agent = 5;
   // 按会话分组。会话 id 从请求头认出来，认不出来的算「未知」。
+  //
+  // 键是给人看的显示名，不是会话 id：有 agent 名时是「agent 名 · 短 id」，
+  // 没有时是「客户端 短 id」；显示名撞了会带「 #2」这样的后缀
+  // （lib/admin/usage.ts 的 sessionLabel / withUniqueLabels）。别拿它当 id 回查。
   repeated UsageBucket by_session = 6;
   // 按主会话分组：子代理的请求并进主代理那一档。
   //
-  // 键是主代理的会话 id（子代理可以再派子代理，往上溯到根）。认不出会话
-  // 的算一档「未知」。
+  // 按主代理的会话 id 分档（子代理可以再派子代理，往上溯到根），键是那一档
+  // 的显示名（「agent 名 · 短 id」或「客户端 主会话 短 id」，撞了带「 #2」），
+  // 同 by_session。认不出会话的算一档「未知」。
   repeated UsageBucket by_parent_session = 7;
   // 按子代理的 agent 名分组（be-match、reviewer……）。子代理的会话 id 每次
   // 运行都不同，这一维才是跨运行能比的。
@@ -627,7 +663,10 @@ enum UnpublishedReason {
   // 目标的上游没登录。
   UNPUBLISHED_REASON_NO_CREDENTIAL = 3;
   // 目标的上游不列这个模型了。
-  UNPUBLISHED_REASON_MODEL_GONE = 4;
+  //
+  // Deprecated：后端已经不再给出这个理由（目录里没有的模型不再判成接不了），
+  // 留着编号只为认得旧数据与旧客户端。不要复用 4。
+  UNPUBLISHED_REASON_MODEL_GONE = 4 [deprecated = true];
   // 目标自己被停用了。
   UNPUBLISHED_REASON_TARGET_DISABLED = 5;
   // 一个能用的目标都没有。

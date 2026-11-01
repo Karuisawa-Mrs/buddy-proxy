@@ -33,6 +33,7 @@ import { accountKeys } from '@/features/accounts/api'
 import { upstreamKeys, useUpstreams } from '@/features/upstreams/api'
 import { humanMessage } from '@/lib/errors'
 import { formatCountdown } from '@/lib/format'
+import { safeHttpUrl } from '@/lib/safe-url'
 
 type LoginDialogProps = {
   open: boolean
@@ -303,7 +304,7 @@ function AuthorizationForm({
         <div className='grid gap-1.5'>
           <Label>授权链接</Label>
           <a
-            href={session.authorizationUrl}
+            href={safeHttpUrl(session.authorizationUrl)}
             target='_blank'
             rel='noreferrer'
             className='flex items-center gap-2 rounded-md border px-3 py-2 font-mono text-xs underline underline-offset-4 break-all hover:bg-accent'
@@ -458,7 +459,7 @@ function TokenForm({
       <div className='grid gap-1.5'>
         <Label>SSO 登录链接</Label>
         <a
-          href={session.authorizationUrl}
+          href={safeHttpUrl(session.authorizationUrl)}
           target='_blank'
           rel='noreferrer'
           className='flex items-center gap-2 rounded-md border px-3 py-2 font-mono text-xs underline underline-offset-4 break-all hover:bg-accent'
@@ -530,7 +531,7 @@ function CodeForm({
       <div className='grid gap-1.5'>
         <Label>登录链接</Label>
         <a
-          href={session.authorizationUrl}
+          href={safeHttpUrl(session.authorizationUrl)}
           target='_blank'
           rel='noreferrer'
           className='flex items-center gap-2 rounded-md border px-3 py-2 font-mono text-xs underline underline-offset-4 break-all hover:bg-accent'

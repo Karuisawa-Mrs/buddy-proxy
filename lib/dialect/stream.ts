@@ -2,6 +2,7 @@ import type { Json } from "../json.ts";
 import { AuthError } from "../credential.ts";
 import { randomUUID } from "node:crypto";
 import { readSseEvents, sseData, sseEvent, SSE_DONE } from "../sse-stream.ts";
+import { anthropicStopReason, openaiFinishReason } from "./stop-reason.ts";
 
 
 /* ------------------------------------------------------------------ *
@@ -22,13 +23,12 @@ export async function* openaiStreamToAnthropic(
 ): AsyncGenerator<string> {
   const messageId = `msg_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
   let started = false;
-  // Anthropic block indexes have to be contiguous, so thinking and text each take
-  // one and the order they appear in decides the numbering.
+  // Anthropic block indexes have to be contiguous, and only one block may be
+  // open at a time: a client that sees a text delta while a thinking block is
+  // still open does not know which block it belongs to. So a new block first
+  // closes the one before it, and every block takes the next index.
   let nextIndex = 0;
-  let textIndex = -1;
-  let thinkingIndex = -1;
-  let textOpen = false;
-  let thinkingOpen = false;
+  let open: { type: "text" | "thinking"; index: number } | null = null;
   let inputTokens = 0;
   let outputTokens = 0;
   let cachedTokens = 0;
@@ -39,6 +39,7 @@ export async function* openaiStreamToAnthropic(
   let finalStopReason = "";
   let finished = false;
   const toolCalls = new Map<number, { id: string; name: string; args: string }>();
+  let toolsSent = false;
 
   async function* start(usage?: Json): AsyncGenerator<string> {
     if (started) return;
@@ -56,6 +57,58 @@ export async function* openaiStreamToAnthropic(
         usage: { input_tokens: usage?.input_tokens ?? 0, output_tokens: usage?.output_tokens ?? 0 },
       },
     });
+  }
+
+  function* closeOpen(): Generator<string> {
+    if (!open) return;
+    yield sseEvent("content_block_stop", { type: "content_block_stop", index: open.index });
+    open = null;
+  }
+
+  /** A delta for a text or thinking block, opening the block when it is not the open one. */
+  function* blockDelta(type: "text" | "thinking", value: string): Generator<string> {
+    if (open?.type !== type) {
+      yield* closeOpen();
+      open = { type, index: nextIndex++ };
+      yield sseEvent("content_block_start", {
+        type: "content_block_start",
+        index: open.index,
+        content_block: type === "text" ? { type: "text", text: "" } : { type: "thinking", thinking: "" },
+      });
+    }
+    yield sseEvent("content_block_delta", {
+      type: "content_block_delta",
+      index: open.index,
+      delta: type === "text" ? { type: "text_delta", text: value } : { type: "thinking_delta", thinking: value },
+    });
+  }
+
+  /**
+   * The collected tool calls, one block each.
+   *
+   * OpenAI splits the tool arguments at token boundaries, so they are only
+   * valid JSON once the call is complete — that is at the finish reason, or,
+   * when the upstream ends the stream without one, at the end. Either way they
+   * go out exactly once.
+   */
+  function* flushToolCalls(): Generator<string> {
+    if (toolsSent) return;
+    toolsSent = true;
+    yield* closeOpen();
+    for (const call of toolCalls.values()) {
+      const index = nextIndex++;
+      yield sseEvent("content_block_start", {
+        type: "content_block_start",
+        index,
+        content_block: { type: "tool_use", id: call.id || `toolu_${randomUUID().slice(0, 12)}`, name: call.name, input: {} },
+      });
+      yield sseEvent("content_block_delta", {
+        type: "content_block_delta",
+        index,
+        delta: { type: "input_json_delta", partial_json: call.args || "{}" },
+      });
+      yield sseEvent("content_block_stop", { type: "content_block_stop", index });
+    }
   }
 
   for await (const chunk of chunks) {
@@ -76,42 +129,17 @@ export async function* openaiStreamToAnthropic(
     if (!choice) continue;
     const delta = choice.delta ?? {};
 
-    if (typeof delta.content === "string" && delta.content.length) {
-      if (!started) yield* start();
-      if (!textOpen) {
-        textIndex = nextIndex++;
-        textOpen = true;
-        yield sseEvent("content_block_start", {
-          type: "content_block_start",
-          index: textIndex,
-          content_block: { type: "text", text: "" },
-        });
-      }
-      yield sseEvent("content_block_delta", {
-        type: "content_block_delta",
-        index: textIndex,
-        delta: { type: "text_delta", text: delta.content },
-      });
-    }
-
-    // Reasoning arrives on a separate channel in the OpenAI dialect.
+    // Reasoning arrives on a separate channel in the OpenAI dialect. It comes
+    // before the answer, so when one chunk carries both it goes first.
     const reasoning = typeof delta.reasoning_content === "string" ? delta.reasoning_content : delta.reasoning;
     if (typeof reasoning === "string" && reasoning.length) {
       if (!started) yield* start();
-      if (!thinkingOpen) {
-        thinkingIndex = nextIndex++;
-        thinkingOpen = true;
-        yield sseEvent("content_block_start", {
-          type: "content_block_start",
-          index: thinkingIndex,
-          content_block: { type: "thinking", thinking: "" },
-        });
-      }
-      yield sseEvent("content_block_delta", {
-        type: "content_block_delta",
-        index: thinkingIndex,
-        delta: { type: "thinking_delta", thinking: reasoning },
-      });
+      yield* blockDelta("thinking", reasoning);
+    }
+
+    if (typeof delta.content === "string" && delta.content.length) {
+      if (!started) yield* start();
+      yield* blockDelta("text", delta.content);
     }
 
     for (const call of Array.isArray(delta.tool_calls) ? delta.tool_calls : []) {
@@ -125,41 +153,23 @@ export async function* openaiStreamToAnthropic(
 
     if (choice.finish_reason) {
       if (!started) yield* start();
-      if (textOpen) {
-        yield sseEvent("content_block_stop", { type: "content_block_stop", index: textIndex });
-        textOpen = false;
-      }
-      if (thinkingOpen) {
-        yield sseEvent("content_block_stop", { type: "content_block_stop", index: thinkingIndex });
-        thinkingOpen = false;
-      }
-      // OpenAI splits the tool arguments at token boundaries, so they are only
-      // valid JSON once the call is complete.
-      let index = nextIndex++;
-      for (const call of toolCalls.values()) {
-        yield sseEvent("content_block_start", {
-          type: "content_block_start",
-          index,
-          content_block: { type: "tool_use", id: call.id || `toolu_${randomUUID().slice(0, 12)}`, name: call.name, input: {} },
-        });
-        yield sseEvent("content_block_delta", {
-          type: "content_block_delta",
-          index,
-          delta: { type: "input_json_delta", partial_json: call.args || "{}" },
-        });
-        yield sseEvent("content_block_stop", { type: "content_block_stop", index });
-        index++;
-      }
-      const stopReason = choice.finish_reason === "length" ? "max_tokens" : choice.finish_reason === "tool_calls" ? "tool_use" : "end_turn";
-      finalStopReason = stopReason;
+      yield* closeOpen();
+      yield* flushToolCalls();
+      finalStopReason = anthropicStopReason(choice.finish_reason);
       // The stream is not over yet: the usage may still be coming.
       finished = true;
     }
   }
 
   if (!started) yield* start();
-  if (textOpen) yield sseEvent("content_block_stop", { type: "content_block_stop", index: textIndex });
-  if (thinkingOpen) yield sseEvent("content_block_stop", { type: "content_block_stop", index: thinkingIndex });
+  yield* closeOpen();
+  // The stream ended without a finish reason. Tool calls collected so far are
+  // still the model's answer: dropping them, and calling the turn end_turn,
+  // leaves the agent with nothing to run.
+  if (!finished && toolCalls.size) {
+    yield* flushToolCalls();
+    finalStopReason = "tool_use";
+  }
   yield sseEvent("message_delta", {
     type: "message_delta",
     delta: { stop_reason: finalStopReason || "end_turn", stop_sequence: null },
@@ -286,7 +296,7 @@ export async function* anthropicStreamToOpenAI(
       if (typeof usage.input_tokens === "number") inputTokens = usage.input_tokens;
       if (typeof usage.output_tokens === "number") outputTokens = usage.output_tokens;
       const reason = evt.delta?.stop_reason;
-      const mapped = reason === "max_tokens" ? "length" : reason === "tool_use" ? "tool_calls" : reason ? "stop" : null;
+      const mapped = reason ? openaiFinishReason(reason) : null;
       if (mapped) {
         finished = true;
         yield chunk({}, mapped);
