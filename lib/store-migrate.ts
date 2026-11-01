@@ -25,12 +25,18 @@ export function tighten(target: string, mode: number): void {
  */
 export function migrate(db: DatabaseSync, file: string): void {
   if (!migrationNeeded(db)) return;
-  backup(db, file);
+  const kept = backup(db, file);
   db.exec("BEGIN IMMEDIATE");
   try {
     migrateProviderToAccounts(db);
     migrateProviderWeight(db);
     db.exec("COMMIT");
+    clearMarker(file);
+    // 备份在「注销 = 删干净」的范围之外：之后删掉的账号，凭据还留在它里面。
+    console.warn(
+      `[STORE] 迁移完成。迁移前的备份在 ${kept}，里面有那时全部的凭据（会话、key、账号密码）；` +
+        `确认迁移无误后请手动删掉它（之后注销的账号，凭据仍留在备份里）。`,
+    );
   } catch (e) {
     try {
       db.exec("ROLLBACK");
@@ -57,14 +63,54 @@ function migrationNeeded(db: DatabaseSync): boolean {
   return columns.includes("kind") || !columns.includes("weight");
 }
 
-/** 迁移前的备份：同一个目录下的 buddy.db.bak-<时间戳>。 */
-function backup(db: DatabaseSync, file: string): void {
+/**
+ * 迁移前的备份：同一个目录下的 buddy.db.bak-<时间戳>。返回备份的路径。
+ *
+ * 迁移失败时事务回滚，库还是拷备份时的样子；而容器是 restart: unless-stopped，
+ * 每次重启都再拷一份，几轮下来磁盘就满了。所以拷之前在库旁边记一个
+ * buddy.db.migrating（里面是备份的路径），迁移成功才删它：它还在、它指的
+ * 备份也还在，就是上一次没迁完，接着用那一份，不再拷。
+ *
+ * 不认「随便哪一份 buddy.db.bak-*」：上一次迁移成功后人没删的备份是更早的
+ * 样子，下一次（新的）迁移拿它当备份就漏了中间那段。
+ */
+function backup(db: DatabaseSync, file: string): string {
+  const marker = markerOf(file);
+  const pending = readMarker(marker);
+  if (pending && fs.existsSync(pending)) {
+    console.log(`[STORE] 上一次迁移没做完，沿用那时的备份 ${pending}，这次不再拷一份`);
+    return pending;
+  }
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const target = `${file}.bak-${stamp}`;
   // VACUUM INTO 不肯覆盖已有的文件，正好：同一毫秒里不会有第二次迁移。
   db.prepare("VACUUM INTO ?").run(target);
   tighten(target, 0o600);
+  fs.writeFileSync(marker, target, { mode: 0o600 });
   console.log(`[STORE] 迁移之前留了一份备份：${target}`);
+  return target;
+}
+
+/** 「迁移还没做完」的记号放在哪。 */
+function markerOf(file: string): string {
+  return `${file}.migrating`;
+}
+
+function readMarker(marker: string): string {
+  try {
+    return fs.readFileSync(marker, "utf8").trim();
+  } catch {
+    return "";
+  }
+}
+
+/** 迁移做完了：记号删掉，下一次迁移（如果有）重新拷备份。 */
+function clearMarker(file: string): void {
+  try {
+    fs.rmSync(markerOf(file), { force: true });
+  } catch {
+    /* 留着也只是让下一次迁移沿用旧备份 */
+  }
 }
 
 /**
