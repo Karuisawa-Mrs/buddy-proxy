@@ -739,10 +739,21 @@ function accountFor(upstreamId: string, accountId: string): ProviderRow | null {
  * 推理端点认的是 key，不是那个 uaa-token。所以贴回 token 之后还要建一把
  * Discovery 的 key —— 建完了上游才是 READY 的。
  */
-async function ensureImportedInternAiKey(): Promise<void> {
-  const session = loadInternAiSession();
+async function ensureImportedInternAiKey(accountId: string): Promise<void> {
+  const session = loadInternAiSession(accountId);
   if (!session) return;
-  await ensureKeySafe("INTERN-AI", () => ensureInternAiKey(session));
+  await ensureKeySafe("INTERN-AI", () => ensureInternAiKey(session, accountId));
+}
+
+/**
+ * 导入落在哪个账号上。
+ *
+ * 账号 id 不复用之后，平台 id（"intern-ai"）不一定还是一个账号：缺省落到它上
+ * 面，就是把 token 存给了一个可能不存在、或者是别人的账号。
+ */
+function internAiImportTarget(input: { upstreamId: string; accountId: string }): ProviderRow | null {
+  const row = accountFor(input.upstreamId, input.accountId);
+  return row && row.kind === "intern-ai" ? row : null;
 }
 
 /**
@@ -762,15 +773,17 @@ export async function exchangeLoginCode(input: {
   if (!input.code.trim()) {
     return { ok: false, message: "缺少授权码。", credentialId: "", accountId: "" };
   }
+  const row = internAiImportTarget(input);
+  if (!row) return { ok: false, message: noImportTarget(input.accountId), credentialId: "", accountId: "" };
   // 换 token 用 discovery 那个子站（端砚），换出来的 token 两个子站都能用。
   const token = await exchangeInternAiCode(input.code.trim(), internAiSite("discovery"));
-  importInternAiToken(token);
-  await ensureImportedInternAiKey();
+  importInternAiToken(token, row.id);
+  await ensureImportedInternAiKey(row.id);
   return {
     ok: true,
     message: "凭据已更新，两个子站共用该凭据，推理用的 key 已就绪。",
-    credentialId: providerSecretId(input.accountId),
-    accountId: input.accountId,
+    credentialId: providerSecretId(row.id),
+    accountId: row.id,
   };
 }
 
@@ -791,12 +804,18 @@ export async function importLoginToken(input: {
   if (!input.token.trim()) {
     return { ok: false, message: "缺少 token。", credentialId: "", accountId: "" };
   }
-  importInternAiToken(input.token.trim());
-  await ensureImportedInternAiKey();
+  const row = internAiImportTarget(input);
+  if (!row) return { ok: false, message: noImportTarget(input.accountId), credentialId: "", accountId: "" };
+  importInternAiToken(input.token.trim(), row.id);
+  await ensureImportedInternAiKey(row.id);
   return {
     ok: true,
     message: "凭据已导入，两个子站共用该凭据，推理用的 key 已就绪。",
-    credentialId: providerSecretId(input.accountId),
-    accountId: input.accountId,
+    credentialId: providerSecretId(row.id),
+    accountId: row.id,
   };
+}
+
+function noImportTarget(accountId: string): string {
+  return accountId ? `没有这个 intern-ai 账号：${accountId}` : "intern-ai 还没有账号，先在面板上新增一个。";
 }
