@@ -21,8 +21,8 @@ import { legacyChatCompletion, readLegacyFrames } from "../../qoder/legacy.ts";
 import { deliverJson, deliverOpenAIChunks, deliverOpenAIStream, type Dialect } from "../deliver.ts";
 import { platformOf } from "../../platforms.ts";
 import { upstreamModel, type Route } from "../routes.ts";
-import { type UpstreamContext, settlement, underPolicy } from "./policy.ts";
-import { abortableSleep } from "../request-life.ts";
+import { type CallLife, type UpstreamContext, settlement, underPolicy } from "./policy.ts";
+import { waitOnBudget } from "../rate-budget.ts";
 
 /**
  * The thinking level a request asks for.
@@ -87,7 +87,7 @@ export async function toQoder(
         () => qoderChatCompletion(openaiBody, { stream, providerId: account.id, region, signal: ctx.signal }),
         ctx.qoderMaxAttempts,
         false,
-        ctx.signal,
+        ctx,
       ),
     settle,
     ctx,
@@ -161,7 +161,7 @@ export async function toQoderLegacy(
           ),
         ctx.legacyMaxAttempts,
         ctx.legacyRetryMs,
-        ctx.signal,
+        ctx,
       ),
     settle,
     ctx,
@@ -220,7 +220,7 @@ async function* legacyWithRetry(
   send: () => Promise<Response>,
   maxAttempts: number,
   retryMs: number,
-  signal?: AbortSignal,
+  life: CallLife = {},
 ): AsyncGenerator<Json> {
   for (let attempt = 1; ; attempt++) {
     const upstream = await send();
@@ -237,9 +237,11 @@ async function* legacyWithRetry(
 
     if (!first.done && first.value.error && attempt < maxAttempts && isRetryableLegacy(first.value.error)) {
       await close();
-      // The client went away while it was queued: stop waiting.
-      await abortableSleep(retryMs, signal);
-      continue;
+      // The wait comes out of the request's budget (see rate-budget.ts); when
+      // it does not fit, the queued answer is the error. The client going away
+      // while it is queued stops the wait.
+      if (await waitOnBudget(retryMs, life)) continue;
+      throw legacyError(first.value.error);
     }
     try {
       if (!first.done) {
@@ -272,7 +274,7 @@ export async function qoderWithRetry(
   send: () => Promise<Response>,
   maxAttempts: number,
   logRoute = false,
-  signal?: AbortSignal,
+  life: CallLife = {},
 ): Promise<Response> {
   for (let attempt = 1; ; attempt++) {
     try {
@@ -280,9 +282,11 @@ export async function qoderWithRetry(
     } catch (e) {
       if (e instanceof LimitError && attempt < maxAttempts) {
         if (logRoute) console.log(`[ROUTE] upstream busy, retry ${attempt}/${maxAttempts - 1} in ${e.retryAfterSec}s`);
-        // The client went away while it was queued: stop waiting.
-        await abortableSleep(e.retryAfterSec * 1000, signal);
-        continue;
+        // The wait comes out of the request's budget, shared with the other
+        // targets and accounts; when it does not fit, the queue is the error.
+        // The client going away while it is queued stops the wait.
+        if (await waitOnBudget(e.retryAfterSec * 1000, life)) continue;
+        console.log(`[ROUTE] qoder is still queued, but the request's wait budget is spent: not retrying`);
       }
       throw e;
     }
