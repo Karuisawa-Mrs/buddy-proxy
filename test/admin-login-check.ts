@@ -227,7 +227,7 @@ async function call(method: string, body: unknown = {}): Promise<{ status: numbe
 
 // 登录落在账号行上，而启动不再插行：先把每个平台下的账号按面板的做法加出来。
 // 面板点「登录」时带着账号 id；不带就落在这个平台的第一个账号上。
-for (const platform of ["minimax", "qiniu", "qoder", "qoder-cn", "workbuddy-cn", "zcode", "tokenrhythm", "sensenova", "intern-ai"]) {
+for (const platform of ["minimax", "qiniu", "qoder", "qoder-cn", "workbuddy-cn", "tokenrhythm", "sensenova", "intern-ai"]) {
   const made = await call("AddAccount", { platform });
   if (made.body?.ok !== true) console.log(`  （加不了 ${platform} 的账号：${JSON.stringify(made.body)}）`);
 }
@@ -297,13 +297,13 @@ check(
   JSON.stringify(workbuddy.body?.session?.authorizationUrl),
 );
 
+// ZCode 已经下架：它不再是平台，登录不开始。
 const zcode = await call("BeginLogin", { upstreamId: "zcode" });
-check("ZCode 开始了", zcode.body?.ok === true, JSON.stringify(zcode.body));
-check("ZCode 是浏览器流", zcode.body?.session?.method === "browser", JSON.stringify(zcode.body?.session));
+check("ZCode 已经不在平台里，登录不开始", zcode.body?.ok !== true, JSON.stringify(zcode.body));
 check(
-  "ZCode 的链接是上游给的那条",
-  String(zcode.body?.session?.authorizationUrl ?? "").includes("zcode-login"),
-  JSON.stringify(zcode.body?.session?.authorizationUrl),
+  "ZCode 不开始时说清楚为什么",
+  typeof zcode.body?.message === "string" && zcode.body.message.length > 0,
+  JSON.stringify(zcode.body?.message),
 );
 
 const tokenrhythm = await call("BeginLogin", { upstreamId: "tokenrhythm" });
@@ -444,15 +444,6 @@ check(
   String(storedSecret?.data ?? "").includes("at-test"),
   String(storedSecret?.data).slice(0, 80),
 );
-
-// ZCode：浏览器 OAuth，轮询同意后凭据落库。
-const zcodeApproved = await waitFor(async () => {
-  const res = await call("GetLoginStatus", { loginId: zcode.body?.session?.loginId });
-  return res.body?.session?.status === "approved";
-});
-check("ZCode 轮询同意会变成 approved", zcodeApproved, "没有变成 approved");
-const zcodeSecret = db.prepare("SELECT data FROM secrets WHERE id = ?").get("session:provider:zcode") as any;
-check("ZCode 的凭据落进了 secrets 表", Boolean(zcodeSecret?.data), JSON.stringify(db.prepare("SELECT id FROM secrets").all()));
 
 // Qoder：上游用 404 说「用户还没批」，那是等待，不是失败。
 const qoderAsked = await waitFor(() => qoderPollRequests >= 1);

@@ -30,14 +30,13 @@ export interface Platform {
 }
 
 /**
- * 十一个平台。
+ * 十个平台。
  *
  * The region and the name live with the platform rather than with the account:
  * they are properties of the service, not of who is logged in.
  */
 export const PLATFORMS: Platform[] = [
   { id: "minimax", kind: "minimax", label: "MiniMax Code", region: "cn" },
-  { id: "zcode", kind: "zcode", label: "ZCode", region: "cn" },
   { id: "qoder", kind: "qoder", label: "Qoder（全球区）", region: "global" },
   { id: "qoder-cn", kind: "qoder", label: "Qoder（中国区）", region: "cn" },
   { id: "workbuddy-cn", kind: "workbuddy", label: "WorkBuddy（中国区）", region: "cn" },
