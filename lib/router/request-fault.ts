@@ -2,9 +2,12 @@
 //
 // The root route tries the next target when one fails. For most failures that
 // is right: the account is out of credit, the upstream is down. But when the
-// upstream says the request itself is malformed (400), too large (413) or
-// cannot be processed (422), the next target gets the same request — and the
-// client waits for every one of them to say no.
+// upstream says the request itself is malformed (400) or cannot be processed
+// (422), the next target gets the same request — and the client waits for
+// every one of them to say no.
+//
+// 413 (too large) is not on that list: "the context is too long" for this
+// target may fit a later target with a larger window, so it moves on.
 //
 // The line is drawn narrowly. A 400 that is about the model ("no such model",
 // "the model is not in this key's group", a limit the model does not allow)
@@ -15,7 +18,7 @@ import { businessCodeOf, upstreamStatusOf } from "../upstream-status.ts";
 import { classifyUpstreamError } from "./provider-selection.ts";
 
 /** The upstream statuses that mean "this request is wrong", whoever serves it. */
-const REQUEST_STATUSES = new Set([400, 413, 422]);
+const REQUEST_STATUSES = new Set([400, 422]);
 
 /** Business codes that are about the model, not the request. */
 const MODEL_CODES = new Set<number | string>([

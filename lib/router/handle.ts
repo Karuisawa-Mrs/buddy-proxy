@@ -164,7 +164,7 @@ async function handleAggregate(
   //
   // The root route barely judges the failures: almost every one moves on to
   // the next target. The exception is the upstream saying the request itself
-  // is wrong (400/413/422, not about the model): the next target gets the
+  // is wrong (400/422, not about the model): the next target gets the
   // same request and says the same, so the selection stops there.
   let stoppedOnRequest = false;
 

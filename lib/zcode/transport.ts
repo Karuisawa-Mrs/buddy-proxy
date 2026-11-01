@@ -12,6 +12,7 @@
 import type { Json } from "../json.ts";
 import crypto from "node:crypto";
 import { AuthError } from "../credential.ts";
+import { withUpstreamStatus } from "../upstream-status.ts";
 import { ZCODE_BASE, ZCODE_VERSION, loadSession, type ZcodeSession } from "./auth.ts";
 import { matchZcodeModel, zcodeEffortFor } from "./models.ts";
 
@@ -208,11 +209,14 @@ export async function zcodeChat(
     // 正文只放在 hint 里，而日志与用量表都只记 message。上游为什么拒，
     // 只能靠这一行（405 那次就是因为没它才查不下去）。
     console.warn(`[ZCODE] 上游 ${response.status} ${ZCODE_MESSAGES_URL}：${text.slice(0, 500)}`);
-    throw new AuthError(
+    const error = new AuthError(
       `upstream HTTP ${response.status}`,
       `ZCode 上游返回 ${response.status}：${text.slice(0, 300)}`,
       502,
     );
+    // 上游自己的状态留在错误上：400 是请求本身的错（换 target 也一样），
+    // 别的才值得换人。没有它，主路由分不出这两种。
+    throw withUpstreamStatus(error, response.status);
   }
   // 上游会用 200 带业务码报错误（额度用尽是 code 1005）。这不是答复。
   const peeked = await peekBusinessFailure(response, Boolean(body.stream));
