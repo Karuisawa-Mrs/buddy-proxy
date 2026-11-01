@@ -23,7 +23,8 @@ import { accountsOfPlatform, type ProviderRow } from "../../providers.ts";
 import { platformPolicy } from "../../platforms.ts";
 import { platformWithoutAccount } from "../routes.ts";
 import { withRetryAfter } from "../deliver.ts";
-import { abortableSleep, ClientClosedError } from "../request-life.ts";
+import { ClientClosedError } from "../request-life.ts";
+import { ledgerOf, RATE_WAIT_BUDGET_MS, waitOnBudget } from "../rate-budget.ts";
 
 /** What the adapters need to know about the router they run in. */
 export interface UpstreamContext {
@@ -161,14 +162,6 @@ const DEFAULT_RATE_WAIT_MS = 30_000;
  */
 const MAX_RATE_WAIT_MS = 60_000;
 
-/**
- * 一个请求里总共最多等多久（毫秒）。
- *
- * 「等得起」说的是一分钟以内，不是「随便多久」。按整个请求算：主路由的每个
- * target、平台的每个账号共用这一份 —— 客户端等的是它们加起来的时间。
- */
-const RATE_WAIT_BUDGET_MS = 60_000;
-
 /** 一个等过了的错误：冷却不写它（见 underPolicy 的 onAttempt）。 */
 export interface RateWaited {
   rateWaited?: boolean;
@@ -226,7 +219,8 @@ async function runWithRateWait<T>(
   life: CallLife = {},
 ): Promise<T> {
   // 没有调用方给的账本（单测直接调）就自己记一份：至少这一个账号不超预算。
-  const spent = life.rateWait ?? { spentMs: 0 };
+  // 有的话，Qoder 排队、TokenRhythm 繁忙的那些重试等待也记在同一本上。
+  const ledger = ledgerOf(life);
   for (let attempt = 0; ; attempt += 1) {
     try {
       return await run(account);
@@ -237,21 +231,18 @@ async function runWithRateWait<T>(
       if (e && typeof e === "object") withRateWaited(e as Record<string, unknown>);
       // 等过两次还是不行：照旧报错（但不写冷却）。
       if (attempt >= 2) throw e;
-      // 这个请求的等待预算用完了：照旧报错。
-      if (spent.spentMs + wait > RATE_WAIT_BUDGET_MS) throw e;
       // 客户端已经走了：不等，也不再打上游。
       if (life.signal?.aborted) throw e;
+      // 这个请求的等待预算用完了：照旧报错。
+      if (ledger.spentMs + wait > RATE_WAIT_BUDGET_MS) throw e;
       console.log(
         `[ROUTE] ${what} account=${account.id} is rate limited on tokens, waiting ${Math.ceil(wait / 1000)}s then retrying`,
       );
-      const began = Date.now();
       try {
         // 客户端在等的时候走了：立刻停，原来那个限流错误照旧抛出去。
-        await abortableSleep(wait, life.signal);
+        if (!(await waitOnBudget(wait, life, ledger))) throw e;
       } catch {
         throw e;
-      } finally {
-        spent.spentMs += Date.now() - began;
       }
     }
   }
@@ -448,6 +439,11 @@ export function settlement(signal?: AbortSignal): Settlement {
     success(): void {
       if (settled || !accountId) return;
       settled = true;
+      // 客户端中途走了：答复没送到，这算不上账号的成功 —— 它原来的冷却不能清掉。
+      if (signal?.aborted) {
+        console.log(`[ROUTE] ${what} account=${accountId} the client went away, keeping its cooldown as it was`);
+        return;
+      }
       // 记账失败不许影响请求：冷却写不下去，也不能让已经成功的答复变成 500。
       try {
         clearCooldown(accountId);
