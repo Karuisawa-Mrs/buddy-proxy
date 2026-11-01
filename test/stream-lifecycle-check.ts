@@ -309,6 +309,8 @@ interface UsageRow {
 
 function usageRows(dataDir: string): UsageRow[] {
   const db = new DatabaseSync(path.join(dataDir, "buddy.db"));
+  // 网关同时开着这个库：等它的写锁，别直接报 database is locked。
+  db.exec("PRAGMA busy_timeout = 5000");
   try {
     const table = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'usage_event'").get();
     if (!table) return [];
@@ -320,6 +322,8 @@ function usageRows(dataDir: string): UsageRow[] {
 
 function cooldownRows(dataDir: string): unknown[] {
   const db = new DatabaseSync(path.join(dataDir, "buddy.db"));
+  // 网关同时开着这个库：等它的写锁，别直接报 database is locked。
+  db.exec("PRAGMA busy_timeout = 5000");
   try {
     return db.prepare("SELECT * FROM cooldown").all();
   } finally {
@@ -429,6 +433,8 @@ try {
     check("答案来自第二个 target", answered.text.includes("second account"), answered.text.slice(0, 300));
     check("客户端没看见第一个 target 的错误帧", !answered.text.includes("overloaded"), answered.text.slice(0, 300));
     const db = new DatabaseSync(path.join(gw.dataDir, "buddy.db"));
+    // 网关同时开着这个库：等它的写锁，别直接报 database is locked。
+    db.exec("PRAGMA busy_timeout = 5000");
     db.exec("DELETE FROM cooldown");
     db.close();
   }
@@ -445,6 +451,8 @@ try {
     check("用量表的状态不是 200", row !== undefined && row.status !== 200, JSON.stringify(row));
     check("用量表里有错误文本", Boolean(row?.error), JSON.stringify(row));
     const db = new DatabaseSync(path.join(gw.dataDir, "buddy.db"));
+    // 网关同时开着这个库：等它的写锁，别直接报 database is locked。
+    db.exec("PRAGMA busy_timeout = 5000");
     db.exec("DELETE FROM cooldown");
     db.close();
   }
