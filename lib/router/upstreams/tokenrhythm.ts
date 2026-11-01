@@ -22,6 +22,7 @@ import {
 import { kindOf } from "../../provider-kinds.ts";
 import { tokenRhythmChat, TokenRhythmBusyError } from "../../tokenrhythm/transport.ts";
 import { deliverJson, deliverOpenAIStream, type Dialect } from "../deliver.ts";
+import { abortableSleep } from "../request-life.ts";
 import { byOrder, describeUpstreamError, isDegradableUpstreamError, isNoBalanceFailure, selectProvider, type ProviderPolicy } from "../provider-selection.ts";
 import { provider } from "../../providers.ts";
 import { platformOf, platformPolicy } from "../../platforms.ts";
@@ -88,6 +89,8 @@ export async function toTokenRhythm(
     id: accountId,
     weight: 0,
     run: async () => {
+      // 客户端已经走了：不再打上游，也不换下一个账号。
+      if (ctx.signal?.aborted) throw ctx.signal.reason;
       if (ctx.logRoute) {
         console.log(
           `[ROUTE] tokenrhythm model=${route.model} policy=${policy} account=${accountId} stream=${stream}`,
@@ -100,9 +103,13 @@ export async function toTokenRhythm(
           openaiBody,
           ctx.tokenRhythmMaxAttempts,
           ctx.clientHeaders,
+          ctx.signal,
         );
         response = call.response;
       } catch (e) {
+        // 我们自己掐断的请求（客户端走了）不是账号的失败：抛出去的是
+        // ClientClosedError，它不可降级，策略就不换人。
+        if (ctx.signal?.aborted) throw ctx.signal.reason;
         // The platform said this account has no money left: it is put aside
         // for a while, and the balances are scanned again so that another
         // account is pinned.
@@ -247,17 +254,19 @@ async function tokenRhythmChatWithRetry(
   body: Record<string, unknown>,
   maxAttempts: number,
   extraHeaders: Record<string, string> = {},
+  signal?: AbortSignal,
 ): Promise<{ response: Response; key: string }> {
   for (let attempt = 1; ; attempt++) {
     try {
-      return await tokenRhythmChat(accountId, body, extraHeaders);
+      return await tokenRhythmChat(accountId, body, extraHeaders, signal);
     } catch (e) {
       if (e instanceof TokenRhythmBusyError && attempt < maxAttempts) {
         console.log(
           `[ROUTE] tokenrhythm busy on ${accountId} (${e.traceId || e.message}), ` +
             `retry ${attempt}/${maxAttempts - 1} in ${e.retryAfterSec}s`,
         );
-        await new Promise((r) => setTimeout(r, e.retryAfterSec * 1000));
+        // The client went away while the relay was busy: stop waiting.
+        await abortableSleep(e.retryAfterSec * 1000, signal);
         continue;
       }
       if (e instanceof TokenRhythmBusyError) {

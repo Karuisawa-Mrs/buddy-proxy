@@ -167,7 +167,7 @@ export function zcodeBody(
  */
 export async function zcodeChat(
   body: Json,
-  options: { effort?: string; providerId?: string; sessionId?: string } = {},
+  options: { effort?: string; providerId?: string; sessionId?: string; signal?: AbortSignal } = {},
 ): Promise<{ response: Response; session: ZcodeSession }> {
   const session = loadSession(options.providerId);
   if (!session) {
@@ -190,7 +190,8 @@ export async function zcodeChat(
         sessionId: options.sessionId,
       }),
     ),
-    signal: AbortSignal.timeout(300_000),
+    // The client's signal too: when it goes, the upstream connection goes.
+    signal: options.signal ? AbortSignal.any([AbortSignal.timeout(300_000), options.signal]) : AbortSignal.timeout(300_000),
   });
   if (response.status === 401) {
     // 401 的正文同样只有这一处能拿到：它不进 message，客户端以外看不到。
