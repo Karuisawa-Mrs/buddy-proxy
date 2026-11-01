@@ -56,11 +56,10 @@ COPY --from=web /build/web/dist/ ./web/dist/
 # the runtime user's ownership, otherwise a fresh volume is root-owned and unwritable.
 RUN mkdir -p /data && chown node:node /data
 
-# 契约生成的代码里有 enum（protobuf 的枚举），而 Node 的「只剥类型」不认
-# enum —— enum 要编译，不能只剥。transform-types 走编译那条路，所以能跑。
-#
-# 生成物是 buf 原样吐出来的，没有额外加工，所以这里改一个开关就够了。
-ENV NODE_OPTIONS="--experimental-transform-types --disable-warning=ExperimentalWarning"
+# 生成物里没有 enum：buf generate 用 erasable_syntax=true，把 protobuf 的枚举写成
+# `as const` 对象加同名类型别名，原生「只剥类型」直接能跑（见 buf.gen.yaml）。
+# 所以运行时不需要 transform-types；那个 flag 在 Node 26 上已经被删掉了。
+ENV NODE_OPTIONS="--disable-warning=ExperimentalWarning"
 
 EXPOSE 6450
 
