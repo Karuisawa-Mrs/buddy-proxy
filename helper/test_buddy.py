@@ -418,7 +418,7 @@ class SendCommandTest(unittest.TestCase):
         session = {
             "client": "pi",
             "id": "01a17814-ad50-775e-8c08-6ff8df765b64",
-            "path": "~/.pi/agent/sessions/--home-shay--/x.jsonl",
+            "path": "/home/user/.pi/agent/sessions/--home-user--/x.jsonl",
         }
         self.assertEqual(
             buddy_todo.send_command("pi", session, "继续"),
@@ -426,7 +426,7 @@ class SendCommandTest(unittest.TestCase):
                 "pi",
                 "-p",
                 "--session",
-                "~/.pi/agent/sessions/--home-shay--/x.jsonl",
+                "/home/user/.pi/agent/sessions/--home-user--/x.jsonl",
                 "--",
                 "继续",
             ],

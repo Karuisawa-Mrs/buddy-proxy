@@ -21,7 +21,7 @@
 
     ~/.config/opencode/opencode.jsonc                  WSL 的 opencode（JSONC）
     ~/.pi/agent/models.json                            WSL 的 pi（JSON）
-    /mnt/c/Users/<you>/.config/opencode/opencode.jsonc  Windows 的 opencode（JSONC）
+    /mnt/c/Users/<你>/.config/opencode/opencode.jsonc  Windows 的 opencode（JSONC）
 
 主路由的 provider 名字叫 buddy，显示名 Buddy (主路由)：
   opencode  baseURL = {GATEWAY}/v1     package = @ai-sdk/anthropic（客户端自己拼 /messages）
@@ -66,11 +66,33 @@ EFFORTS = ["low", "medium", "high", "max"]
 PI_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"]
 
 # 三个目标：(显示用的名字, 路径, 是不是 JSONC)
-TARGETS = [
-    ("opencode (WSL)", pathlib.Path.home() / ".config/opencode/opencode.jsonc", True),
-    ("pi (WSL)", pathlib.Path.home() / ".pi/agent/models.json", False),
-    ("opencode (Windows)", pathlib.Path("/mnt/c/Users/<you>/.config/opencode/opencode.jsonc"), True),
-]
+# Windows 那份不写死用户名：WSL 里 Windows 用户名跟 Linux 用户名常常不是
+# 同一个，写死一个名字只会写到不存在的路径上 —— 按 /mnt/c/Users 下面实际
+# 存在的目录找。
+WINDOWS_USERS_ROOT = pathlib.Path("/mnt/c/Users")
+
+
+def windows_opencode_config() -> pathlib.Path | None:
+    """Windows 那份 opencode 配置。没有就返回 None（那一处跳过）。"""
+    if not WINDOWS_USERS_ROOT.is_dir():
+        return None
+    for entry in sorted(WINDOWS_USERS_ROOT.iterdir()):
+        candidate = entry / ".config" / "opencode" / "opencode.jsonc"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def targets() -> list:
+    """这次要同步的几处：WSL 的 opencode、WSL 的 pi，Windows 的 opencode（有才有）。"""
+    out = [
+        ("opencode (WSL)", pathlib.Path.home() / ".config/opencode/opencode.jsonc", True),
+        ("pi (WSL)", pathlib.Path.home() / ".pi/agent/models.json", False),
+    ]
+    windows = windows_opencode_config()
+    if windows:
+        out.append(("opencode (Windows)", windows, True))
+    return out
 
 # 真正答话的网关（拉到了清单的那个）与写进客户端的 api key。
 GATEWAY = ""
@@ -623,7 +645,7 @@ def run_check(gateway: str, models: list) -> int:
     print("")
     print("结果：")
     total = 0
-    for label, path, is_jsonc in TARGETS:
+    for label, path, is_jsonc in targets():
         print(f"  {label}  {path}")
         if not path.exists():
             print("    没有这个文件，跳过")
@@ -691,7 +713,7 @@ def main(argv: list) -> int:
     print("")
 
     results = []
-    for label, path, is_jsonc in TARGETS:
+    for label, path, is_jsonc in targets():
         results.append(patch_target(label, path, is_jsonc, sources, args.dry_run, args.keep_legacy))
 
     print("结果：")

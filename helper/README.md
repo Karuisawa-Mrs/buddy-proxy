@@ -22,7 +22,7 @@ python3 helper/buddy_todo.py
 跑一次就把三处配置对齐：
 
 - `~/.config/opencode/opencode.jsonc`（WSL 的 opencode）
-- `/mnt/c/Users/<you>/.config/opencode/opencode.jsonc`（Windows 的 opencode，没有这个文件就跳过）
+- `/mnt/c/Users/<你>/.config/opencode/opencode.jsonc`（Windows 的 opencode，没有这个文件就跳过）
 - `~/.pi/agent/models.json`（WSL 的 pi）
 
 ```bash
@@ -34,11 +34,11 @@ python3 helper/buddy_sync.py --check       # 只比对：有差异退出码 1，
 `--check` 是用来发现「配置过期」的。输出长这样：
 
 ```
-  opencode (WSL)  ~/.config/opencode/opencode.jsonc
+  opencode (WSL)  /home/<你>/.config/opencode/opencode.jsonc
     random-work max_output_tokens: 网关 65536 / 本地 131072
 ```
 
-网关地址默认 `http://127.0.0.1:6450`（连不上就试 NAS 上那份 `gateway.example:6450`），
+网关地址默认 `http://127.0.0.1:6450`（连不上就试局域网里网关所在机器那份地址），
 `--gateway` 或环境变量 `BUDDY_GATEWAY` 可以指定。
 
 ## 盯额度 + 发消息
