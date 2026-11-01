@@ -367,7 +367,11 @@ export function logoutAccount(accountId: string): { ok: boolean; message: string
   if (!id) return { ok: false, message: "要一个账号 id", removed: 0 };
   const row = provider(id);
   if (!row) return { ok: false, message: `没有这个账号：${id}`, removed: 0 };
+  // 还在等的登录也取消：不然注销之后平台批下来，凭据又写回来了。
+  cancelPendingLogins(id, "账号已注销，登录已取消。");
   const removed = forgetAccountRecords(id, row.kind);
+  // 各家自己在内存里记着的（TokenRhythm 钉住的账户、钱包缓存……），与删账号一样。
+  forgetKindState(row);
   if (!removed) return { ok: true, message: "这个账号本来就没有凭据", removed: 0 };
   console.log(`[ADMIN] ${id} 注销了，删掉 ${removed} 条凭据`);
   return { ok: true, message: `注销了，删掉 ${removed} 条凭据`, removed };
@@ -400,6 +404,15 @@ export function forgetAccountRecords(accountId: string, kind?: string): number {
   return removed;
 }
 
+/** 各家自己在内存里记着的那些，清掉；清不掉只记一笔。 */
+function forgetKindState(row: ProviderRow): void {
+  try {
+    kindOf(row.kind)?.forget?.(row);
+  } catch (e) {
+    console.warn(`[ADMIN] ${row.id} 的内存状态清不掉：${(e as Error)?.message}`);
+  }
+}
+
 /**
  * 删一个账号：行与凭据一起。
  *
@@ -418,11 +431,7 @@ export function deleteAccount(accountId: string): { ok: boolean; message: string
   deleteProviderRow(id);
   const removed = forgetAccountRecords(id, row.kind);
   // 各家自己在内存里记着的（TokenRhythm 钉住的账户、钱包缓存……）。
-  try {
-    kindOf(row.kind)?.forget?.(row);
-  } catch (e) {
-    console.warn(`[ADMIN] ${id} 的内存状态清不掉：${(e as Error)?.message}`);
-  }
+  forgetKindState(row);
   console.log(
     `[ADMIN] ${id} 删了，连 ${removed} 条凭据一起` + (cancelled ? `，取消了 ${cancelled} 次还在等的登录` : ""),
   );
