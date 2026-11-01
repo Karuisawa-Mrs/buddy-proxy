@@ -240,10 +240,17 @@ export function PublishedModelsPage() {
                               key={`${target.groupName}-${target.upstreamModel}`}
                               className='grid gap-0.5'
                             >
-                              <div className='flex items-center gap-1'>
+                              {/* 表格单元格是 whitespace-nowrap：名字不放开换行，
+                                  break-all 不生效，长名字溢出 200px 的框，后面的
+                                  徽标就压在它上面。名字放开换行，徽标不收缩，
+                                  一行放不下时整个换到下一行。 */}
+                              <div
+                                className='flex flex-wrap items-center gap-1'
+                                data-testid='target-line'
+                              >
                                 <span
                                   className={[
-                                    'max-w-[200px] font-mono text-xs break-all',
+                                    'min-w-0 max-w-[200px] font-mono text-xs break-all whitespace-normal',
                                     // 当前目标只靠颜色认：文字标记一律不要。
                                     target.current
                                       ? 'text-emerald-600 dark:text-emerald-400'
@@ -257,7 +264,7 @@ export function PublishedModelsPage() {
                                 {target.blocked ? (
                                   // 接不了的目标标红，写明为什么、什么时候能再接。
                                   <span
-                                    className='rounded border border-red-500/40 px-1 text-[10px] font-medium text-red-600 dark:text-red-400'
+                                    className='shrink-0 rounded border border-red-500/40 px-1 text-[10px] font-medium text-red-600 dark:text-red-400'
                                     title={target.blockedReason}
                                   >
                                     接不了：{target.blockedReason}
