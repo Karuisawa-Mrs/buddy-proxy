@@ -122,6 +122,10 @@ export async function refreshSessionFlow<T extends SessionTokens>(flow: RefreshF
 
 /** 锁里的那一段：重新读会话、再判一次临期、问平台、存回去。 */
 async function refreshLocked<T extends SessionTokens>(flow: RefreshFlow<T>, timeoutMs: number): Promise<T> {
+  // 等锁的时候，前一个持有者可能已经拿同一张 refresh token 问过平台、被拒了：
+  // 再问一次是同样的拒绝（还可能被当成重放）。进锁后再判一次死。
+  const dead = deadSession(flow.id);
+  if (dead) throw new AuthError("session refused by the platform", dead, 503);
   // 拿到锁之后重新读：等锁的时候，前一个持有者可能已经换好了。
   const session = flow.load();
   if (!session) {

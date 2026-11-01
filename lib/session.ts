@@ -11,7 +11,8 @@
 // migration is under way, and the first read moves the session into the
 // database.
 
-import { AuthError, type Credential } from "./credential.ts";
+import { AuthError, authLog, tokenFingerprint, type Credential } from "./credential.ts";
+import { dataDir } from "./paths.ts";
 import { LockUnavailableError, getSecret, setSecret, withLock } from "./store.ts";
 
 /** The fields every session file has. */
@@ -162,6 +163,8 @@ export async function withSessionLock<T>(
     // that and use it.
     const existing = getSecret<SessionTokens>(id);
     if (existing) {
+      // 留一笔：这一轮没换令牌，交出去的是库里那一份（可能是临期的）。
+      authLog(dataDir(), `${id} lock busy, using stored session`, `access ${tokenFingerprint(existing.accessToken)}`);
       // SAFETY: the lock is named after the session, so what is stored under
       // it is that session; T is the caller's view of it.
       return existing as unknown as T;

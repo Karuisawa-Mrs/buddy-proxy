@@ -10,6 +10,10 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { tighten } from "./store-migrate.ts";
+
+/** 这个进程里已经收紧过的 auth.log：每条日志都 chmod 一次没必要。 */
+const tightened = new Set<string>();
 
 export const DEFAULT_CLIENT_ID = "mcode-public";
 export const DEFAULT_AUDIENCE = "agent-backend";
@@ -29,8 +33,13 @@ export function authLog(dir: string, event: string, detail = ""): void {
   try {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     // 0600：日志里只有指纹，但账号、时间线与平台的原话也不是谁都该读的。
-    // mode 只在新建时生效，已有的文件不动。
-    fs.appendFileSync(path.join(dir, "auth.log"), line + "\n", { mode: 0o600 });
+    // mode 只在新建时生效，所以旧版留下的（0644）每个进程收紧一次。
+    const file = path.join(dir, "auth.log");
+    fs.appendFileSync(file, line + "\n", { mode: 0o600 });
+    if (!tightened.has(file)) {
+      tightened.add(file);
+      tighten(file, 0o600);
+    }
   } catch {
     /* logging must never break a request */
   }
