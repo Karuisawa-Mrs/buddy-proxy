@@ -25,7 +25,10 @@ export class CatalogCache<T> {
   private readonly cacheId: string | undefined;
 
   /** 清单最多放多久（毫秒）。 */
-  constructor(private readonly ttlMs: number, options: { cacheId?: string } = {}) {
+  private readonly ttlMs: number;
+
+  constructor(ttlMs: number, options: { cacheId?: string } = {}) {
+    this.ttlMs = ttlMs;
     this.cacheId = options.cacheId;
   }
 

@@ -3,10 +3,15 @@
 #
 # 放在 lib/gen/ 而不是 web/ 里：后端也要用它（Connect 的服务描述在生成物
 # 里），放一处两边共用，不要各拷一份。
+#
+# erasable_syntax=true：Node 26 删掉了 --experimental-transform-types，只剩
+# 「只剥类型」，而剥类型不认 enum。生成器于是把 enum 写成 `as const` 对象加同名
+# 类型别名：原生 strip 能直接跑，值与类型的用法都不变。
 version: v2
 plugins:
-  - remote: buf.build/bufbuild/es:v2.2.3
+  - remote: buf.build/bufbuild/es:v2.16.0
     out: lib/gen
     opt:
       - target=ts
       - import_extension=none
+      - erasable_syntax=true

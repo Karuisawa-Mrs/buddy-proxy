@@ -9,7 +9,7 @@ importers:
   .:
     dependencies:
       '@bufbuild/protobuf':
-        specifier: ^2.2.3
+        specifier: ^2.16.0
         version: 2.16.0
       '@connectrpc/connect':
         specifier: ^2.0.0
