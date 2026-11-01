@@ -21,6 +21,9 @@
 
 import { AuthError } from "./credential.ts";
 import { allKinds } from "./provider-kinds.ts";
+// 只用 store：providers.ts 会把各平台都拉进来，而各平台在加载时要调这里的
+// registerLoginFlow —— 从这里引 providers.ts 会在模块循环里撞上还没初始化的表。
+import { store } from "./store.ts";
 
 /** 面板按它决定画什么。 */
 export type LoginMethod = "device" | "browser" | "password" | "code" | "token" | "key";
@@ -193,8 +196,37 @@ export async function submitLoginResult<T = unknown>(
   if (!flow) throw new AuthError("unknown upstream", `这个上游还没有登录的办法：${kind}`, 400);
   if (!flow.submit) throw new AuthError("no login", `${flow.label} 不需要提交账号密码。`, 400);
   const result = await flow.submit(ctx, input);
+  assertAccountExists(ctx);
   const credentialId = await flow.commit(ctx, result);
   return { credentialId, result };
+}
+
+/**
+ * 这次登录还要不要接着做。
+ *
+ * 面板上点了「取消」、账号被删了，答案就是 false：轮询停下，批下来的会话也
+ * 不落库。
+ */
+export type LoginStillWanted = () => boolean;
+
+/** 登录被取消了：调用方看到它就知道不用再报「失败」。 */
+export class LoginCancelledError extends AuthError {
+  constructor(kind: string) {
+    super(`${kind} login cancelled`, "登录已取消。", 409);
+  }
+}
+
+/**
+ * 账号行还在吗。
+ *
+ * 落库之前问一次：账号在登录途中被删了，批下来的会话没有主人，写进去就是一
+ * 条孤儿凭据 —— 等同一个 id 再出现时它就成了别人的。
+ */
+function assertAccountExists(ctx: LoginContext): void {
+  const row = store().prepare("SELECT id FROM provider WHERE id = ?").get(ctx.accountId);
+  if (!row) {
+    throw new AuthError("account gone", `账号在登录途中被删了：${ctx.accountId}，这次登录的结果不保存。`, 409);
+  }
 }
 
 /**
@@ -202,12 +234,16 @@ export async function submitLoginResult<T = unknown>(
  *
  * `poll` 抛出来的错原样往上抛：面板上那句话是平台自己的意思（「被拒了」与
  * 「窗口过了」不一样），在这一层改写只会把它变成一句笼统的失败。
+ *
+ * `stillWanted` 在每一轮轮询之前、以及落库之前各问一次：取消发生在轮询途中
+ * 时，平台可能照样批了，但会话不能写进去 —— 用户已经说了不要。
  */
 export async function driveLogin<T>(
   kind: string,
   ctx: LoginContext,
   ticket: LoginTicket,
   deadlineMs = ticket.expiresAtMs,
+  stillWanted: LoginStillWanted = () => true,
 ): Promise<{ credentialId: string; session: T }> {
   const flow = loginFlowOf(kind);
   if (!flow) {
@@ -218,8 +254,13 @@ export async function driveLogin<T>(
   }
   const interval = flow.pollIntervalMs ?? 2000;
   while (Date.now() < deadlineMs) {
+    if (!stillWanted()) throw new LoginCancelledError(kind);
     const result = await flow.poll(ctx, ticket);
     if (result.state === "approved") {
+      // 轮询那一下可能等了很久（WorkBuddy 在里头一直等到批准）：落库前再问。
+      // 这一问与 commit 之间没有 await，同一个进程里不会有人插进来。
+      if (!stillWanted()) throw new LoginCancelledError(kind);
+      assertAccountExists(ctx);
       const credentialId = await flow.commit(ctx, result.session);
       if (flow.derive) {
         // 派生资源失败不算登录失败：会话已经存下来了，下一次扫描会补。

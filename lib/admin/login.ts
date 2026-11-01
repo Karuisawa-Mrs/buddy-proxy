@@ -26,7 +26,7 @@ import { providerSecretId } from "../credential-ids.ts";
 // Side-effect import: this module registers zcode's login flow
 import "../zcode/auth.ts";
 import type { ZcodeLogin } from "../zcode/auth.ts";
-import { beginLoginFlow, driveLogin, submitLogin, submitLoginResult, type LoginContext, type LoginMethod, type LoginTicket } from "../login-flow.ts";
+import { beginLoginFlow, driveLogin, LoginCancelledError, submitLogin, submitLoginResult, type LoginContext, type LoginMethod, type LoginTicket } from "../login-flow.ts";
 export type { LoginMethod };
 import { regionOf as workBuddyRegionOf } from "../workbuddy/auth.ts";
 // Side-effect import: this module registers tokenrhythm's login flow
@@ -353,16 +353,27 @@ async function pollLoop(session: StoredLogin): Promise<void> {
   } catch (e) {
     const current = loadLogin(session.loginId);
     if (!current || current.status === "cancelled") return;
+    if (e instanceof LoginCancelledError) return;
     updateLogin(session.loginId, { status: "failed", message: errorText(e) });
     authLog(dataDir(), `${session.accountId} 登录失败`, errorText(e));
     console.warn(`[LOGIN] ${session.accountId} 登录失败：${errorText(e)}`);
   }
 }
 
+/**
+ * 这次登录还作数吗：那一行还在、还是 pending。
+ *
+ * cache 表多进程共享，所以每次都重新读：取消可能是另一个进程（面板）写的。
+ */
+function stillPending(loginId: string): () => boolean {
+  return () => loadLogin(loginId)?.status === "pending";
+}
+
 /** 跑上游自己的轮询，成功后把凭据存起来，返回凭据的 id。 */
 async function runPoll(session: StoredLogin): Promise<string> {
   const poll = session.poll ?? {};
   const providerId = session.accountId;
+  const wanted = stillPending(session.loginId);
   switch (poll.kind) {
     case "minimax": {
       // SAFETY: rows with poll.kind === "minimax" are written by startMinimax
@@ -381,7 +392,7 @@ async function runPoll(session: StoredLogin): Promise<string> {
         message: session.message,
         state: { auth },
       };
-      const { credentialId } = await driveLogin("minimax", ctx, ticket, session.expiresAt);
+      const { credentialId } = await driveLogin("minimax", ctx, ticket, session.expiresAt, wanted);
       return credentialId;
     }
     case "qoder": {
@@ -401,7 +412,7 @@ async function runPoll(session: StoredLogin): Promise<string> {
         message: session.message,
         state: { auth },
       };
-      const { credentialId } = await driveLogin("qoder", ctx, ticket, session.expiresAt);
+      const { credentialId } = await driveLogin("qoder", ctx, ticket, session.expiresAt, wanted);
       return credentialId;
     }
     case "workbuddy": {
@@ -419,7 +430,7 @@ async function runPoll(session: StoredLogin): Promise<string> {
         message: session.message,
         state: { state },
       };
-      const { credentialId } = await driveLogin("workbuddy", ctx, ticket, session.expiresAt);
+      const { credentialId } = await driveLogin("workbuddy", ctx, ticket, session.expiresAt, wanted);
       return credentialId;
     }
     case "zcode": {
@@ -439,7 +450,7 @@ async function runPoll(session: StoredLogin): Promise<string> {
         message: session.message,
         state: { login },
       };
-      const { credentialId } = await driveLogin("zcode", ctx, ticket, session.expiresAt);
+      const { credentialId } = await driveLogin("zcode", ctx, ticket, session.expiresAt, wanted);
       return credentialId;
     }
     default:
@@ -527,6 +538,22 @@ export function getLoginStatus(loginId: string): StoredLogin | null {
     return updateLogin(loginId, { status: "expired", message: "登录窗口已过期，请重新发起登录。" });
   }
   return current;
+}
+
+/**
+ * 把这个账号还在等的登录都取消掉。
+ *
+ * 删账号时调：后台的轮询看到 cancelled 就停，批下来的会话也不落库。返回取消
+ * 了几次。
+ */
+export function cancelPendingLogins(accountId: string, message = "账号已删除，登录已取消。"): number {
+  let cancelled = 0;
+  for (const session of loginsOf(accountId)) {
+    if (session.status !== "pending") continue;
+    updateLogin(session.loginId, { status: "cancelled", message });
+    cancelled++;
+  }
+  return cancelled;
 }
 
 /** 用户不等了。 */
