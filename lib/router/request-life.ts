@@ -9,9 +9,15 @@
 //   - a client that reads slowly: `res.write()` returns false and the next
 //     frame waits for `drain`. That is backpressure, not a disconnect.
 //   - a client that is gone: the response closed before it was finished.
+//
+// A client that stays connected and never reads again is neither, and would
+// hold the upstream connection and the account's slot forever. So a write
+// that has waited for `drain` longer than ROUTER_WRITE_STALL_MS gives up: the
+// connection is destroyed, and the request ends the way a disconnect does.
 
 import type Koa from "koa";
 import type { ServerResponse } from "node:http";
+import { configNumber } from "../config.ts";
 
 /** The client closed its connection before the answer was finished. */
 export class ClientClosedError extends Error {
@@ -20,6 +26,23 @@ export class ClientClosedError extends Error {
     this.name = "ClientClosedError";
   }
 }
+
+/**
+ * The client stayed connected but stopped reading.
+ *
+ * A kind of ClientClosedError: everything that stops for a client that went
+ * stops for this one too (no cooldown, no next target).
+ */
+export class ClientStalledError extends ClientClosedError {
+  constructor(ms: number) {
+    super();
+    this.message = `the client stopped reading for ${ms}ms`;
+    this.name = "ClientStalledError";
+  }
+}
+
+/** How long a write may wait for the client to read, by default (ms). */
+const WRITE_STALL_MS = 120_000;
 
 /** What one client request shares across its targets and accounts. */
 export interface RequestLife {
@@ -30,6 +53,7 @@ export interface RequestLife {
 }
 
 const lives = new WeakMap<object, RequestLife>();
+const controllers = new WeakMap<object, AbortController>();
 const failures = new WeakMap<object, { error: unknown }>();
 
 /**
@@ -53,6 +77,7 @@ export function requestLife(ctx: Koa.Context): RequestLife {
   if (res.destroyed || ctx.req.socket?.destroyed) gone();
   const life: RequestLife = { signal: controller.signal, rateWait: { spentMs: 0 } };
   lives.set(ctx, life);
+  controllers.set(ctx, controller);
   return life;
 }
 
@@ -78,18 +103,38 @@ export async function writeFrame(ctx: Koa.Context, chunk: string | Uint8Array): 
   } catch {
     return false;
   }
-  if (!flushed && !res.destroyed) await drained(res);
+  if (!flushed && !res.destroyed) {
+    const stallMs = configNumber("ROUTER_WRITE_STALL_MS", WRITE_STALL_MS);
+    if (!(await drained(res, stallMs))) {
+      // Connected, but not reading: give the upstream connection and the
+      // account back. The abort carries the reason; destroying the response
+      // closes the socket, and everything waiting on the signal stops.
+      console.warn(`[ROUTE] the client has not read for ${stallMs}ms, closing the connection`);
+      requestLife(ctx);
+      const controller = controllers.get(ctx);
+      if (controller && !controller.signal.aborted) controller.abort(new ClientStalledError(stallMs));
+      res.destroy();
+      return false;
+    }
+  }
   return !clientGone(ctx);
 }
 
-/** The socket buffer was emptied, or the connection closed. */
-function drained(res: ServerResponse): Promise<void> {
+/**
+ * The socket buffer was emptied, or the connection closed: `true`. `false`
+ * when neither happened within `stallMs`.
+ */
+function drained(res: ServerResponse, stallMs: number): Promise<boolean> {
   return new Promise((resolve) => {
-    const done = () => {
+    const finish = (ok: boolean) => {
+      clearTimeout(timer);
       res.off("drain", done);
       res.off("close", done);
-      resolve();
+      resolve(ok);
     };
+    const done = () => finish(true);
+    // A setting of 0 (or less) turns the limit off.
+    const timer = stallMs > 0 ? setTimeout(() => finish(false), stallMs) : undefined;
     res.on("drain", done);
     res.on("close", done);
   });

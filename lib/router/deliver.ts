@@ -224,7 +224,10 @@ export async function peekStream(body: ReadableStream<Uint8Array>): Promise<Read
       else controller.enqueue(value);
     },
     cancel(reason) {
-      reader.cancel(reason);
+      // The upstream body may already have failed with that same reason (the
+      // request's abort reaches the fetch too): cancelling it then rejects,
+      // and nobody else is there to catch it — it would take the process down.
+      return reader.cancel(reason).catch(() => {});
     },
   });
 }
