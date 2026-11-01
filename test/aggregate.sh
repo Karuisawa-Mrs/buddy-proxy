@@ -20,7 +20,10 @@ cd "$ROOT"
 # different places on Windows (see test/smoke.sh).
 LOG_DIR="test/.tmp/aggregate"
 mkdir -p "$LOG_DIR"
-export BUDDY_DATA_DIR="${BUDDY_DATA_DIR:-$LOG_DIR/data}"
+# The database is always a fresh directory of the test's own, whatever the
+# shell exported: the run removes it, and a developer's BUDDY_DATA_DIR may point
+# at the real one.
+export BUDDY_DATA_DIR="$(mktemp -d "$LOG_DIR/data.XXXXXX")"
 PASS=0
 FAIL=0
 
@@ -35,8 +38,6 @@ check() {
   fi
 }
 
-rm -rf "$BUDDY_DATA_DIR"
-mkdir -p "$BUDDY_DATA_DIR"
 
 # The sessions of the two upstreams the requests need go into the test's own
 # database. The mock upstream does not look at the credential, but the router
@@ -55,6 +56,7 @@ ROUTER_PID=$!
 cleanup() {
   kill $ROUTER_PID 2>/dev/null
   wait $ROUTER_PID 2>/dev/null
+  rm -rf "$BUDDY_DATA_DIR"
 }
 trap cleanup EXIT
 
